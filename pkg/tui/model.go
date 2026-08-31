@@ -58,7 +58,8 @@ type Model struct {
 	thinkingMode string // "off", "minimal", "low", "medium", "high", "xhigh", "max"
 	gitBranch    string
 	tokens       int
-	usage        *sessionUsage // shared accumulator so listeners on Model copies report back
+	usage        *sessionUsage     // shared accumulator so listeners on Model copies report back
+	slashCursor  int               // highlighted row in the inline slash suggestion popup
 	bgTasks      map[string]string // id -> label
 	bgCounter    int
 	sessionName  string
@@ -223,6 +224,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+		// inline slash suggestions: arrows navigate, Tab/Shift+Tab complete
+		if len(m.slashSuggestions(m.textarea.Value())) > 0 {
+			switch msg.String() {
+			case "down", "ctrl+n":
+				m.slashCursor++
+				return m, nil
+			case "up", "ctrl+p":
+				m.slashCursor--
+				return m, nil
+			case "tab":
+				m.completeSlash()
+				return m, nil
+			case "shift+tab":
+				m.slashCursor--
+				m.completeSlash()
+				return m, nil
+			}
 		}
 		switch msg.String() {
 		case "ctrl+c", "ctrl+q":
@@ -391,7 +410,51 @@ func (m Model) View() string {
 	}
 	header := renderHeader(m.width, m.engine.Config.Model)
 
-	mainView := m.viewport.View()
+	// inline slash suggestion popup (shown while typing "/..." with no args)
+	slashPopup := ""
+	if !m.picker.active && !m.streaming {
+		if sugs := m.slashSuggestions(m.textarea.Value()); len(sugs) > 0 {
+			cursor := m.slashCursor
+			if cursor < 0 {
+				cursor = 0
+			}
+			cursor %= len(sugs)
+			const maxRows = 8
+			lo := 0
+			hi := len(sugs)
+			if cursor >= maxRows {
+				lo = cursor - maxRows + 1
+			}
+			if hi > lo+maxRows {
+				hi = lo + maxRows
+			}
+			var sb strings.Builder
+			for i, s := range sugs[lo:hi] {
+				name := "/" + s.Name
+				pad := ""
+				if w := 18 - len(name); w > 0 {
+					pad = strings.Repeat(" ", w)
+				}
+				line := name + pad + s.Description
+				if lo+i == cursor {
+					sb.WriteString(suggestionActiveStyle.Render(line) + "\n")
+				} else {
+					sb.WriteString(suggestionStyle.Render(line) + "\n")
+				}
+			}
+			sb.WriteString(helpStyle.Render("↑/↓ navigate · Tab complete · Enter send"))
+			slashPopup = sb.String()
+		}
+	}
+
+	vp := m.viewport
+	if slashPopup != "" {
+		rows := strings.Count(slashPopup, "\n") + 1
+		if h := vp.Height - rows; h > 3 {
+			vp.Height = h
+		}
+	}
+	mainView := vp.View()
 	if m.picker.active {
 		var qView string
 		if m.picker.searchable {
@@ -441,6 +504,7 @@ func (m Model) View() string {
 		mainView,
 		status,
 		input,
+		slashPopup,
 		footer,
 	)
 }

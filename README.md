@@ -602,10 +602,13 @@ go vet ./...
 - [x] Task 6 — Agent engine + steering
 - [x] Task 7 — RPC JSONL server
 - [x] Task 8 — TUI Bubbletea + CLI print + `cmd/pi`
-- [ ] Prompt template `.pi/prompts/*.md` + slash command custom
-- [ ] Tool tambahan (`glob`, `grep`, `todo`) via registry
-- [ ] Compaction LLM-based (summarization via provider)
-- [ ] Session resume via CLI flag `--session <id>`
+- [x] Prompt template `.pi/prompts/*.md` + slash command custom
+- [x] Tool tambahan (`glob`, `grep`, `todo`) via registry
+- [x] Compaction LLM-based (summarization via provider)
+- [x] Session resume via CLI flag `--session <id>`
+- [x] Slash command suggestions (live autocomplete saat mengetik `/`)
+- [x] `/login` custom endpoint (`--url`) + custom model (`--model`), provider apa pun via OpenAI-compatible
+- [x] Session fork/clone/name/export, editor `@file`, bash mode `!cmd`/`!!cmd`
 
 ---
 

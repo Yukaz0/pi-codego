@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +18,57 @@ import (
 )
 
 // slashCommand defines a slash command
+// slashSuggestions returns commands (and prompt templates) whose name starts
+// with the typed prefix. prefix must begin with "/" and contain no space.
+// Results are sorted by name; aliases are included.
+func (m *Model) slashSuggestions(prefix string) []slashCommand {
+	if !strings.HasPrefix(prefix, "/") || strings.ContainsAny(prefix, " \n") {
+		return nil
+	}
+	q := strings.ToLower(strings.TrimPrefix(prefix, "/"))
+	seen := map[string]bool{}
+	var out []slashCommand
+	names := make([]string, 0, len(slashCommands))
+	for n := range slashCommands {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if strings.HasPrefix(n, q) {
+			out = append(out, slashCommands[n])
+			seen[n] = true
+		}
+	}
+	// prompt templates from .pi/prompts
+	if m.engine != nil && m.engine.Config.PromptLoader != nil {
+		var tpls []slashCommand
+		for _, tpl := range m.engine.Config.PromptLoader.LoadAll() {
+			if seen[tpl.Name] || !strings.HasPrefix(strings.ToLower(tpl.Name), q) {
+				continue
+			}
+			desc := tpl.Description
+			if desc == "" {
+				desc = "prompt template"
+			}
+			tpls = append(tpls, slashCommand{Name: tpl.Name, Description: desc, Usage: "/" + tpl.Name})
+		}
+		sort.Slice(tpls, func(i, j int) bool { return tpls[i].Name < tpls[j].Name })
+		out = append(out, tpls...)
+	}
+	return out
+}
+
+// completeSlash inserts the highlighted suggestion into the textarea.
+func (m *Model) completeSlash() {
+	sugs := m.slashSuggestions(m.textarea.Value())
+	if len(sugs) == 0 {
+		return
+	}
+	idx := m.slashCursor % len(sugs)
+	m.textarea.SetValue("/" + sugs[idx].Name + " ")
+	m.slashCursor = 0
+}
+
 type slashCommand struct {
 	Name        string
 	Description string
@@ -32,7 +84,7 @@ func init() {
 		"hotkeys":       {Name: "hotkeys", Description: "Show keyboard shortcuts", Usage: "/hotkeys", Handler: handleHotkeys},
 		"changelog":     {Name: "changelog", Description: "Show version history", Usage: "/changelog", Handler: handleChangelog},
 		"model":         {Name: "model", Description: "Switch models: /model [provider/model] or /model", Usage: "/model [provider/model]", Handler: handleModel},
-		"login":         {Name: "login", Description: "Manage provider credentials: /login [provider] [api-key]", Usage: "/login [provider] [api-key]", Handler: handleLogin},
+		"login":         {Name: "login", Description: "Save provider credentials / custom endpoint: /login [provider] [key] [--url <endpoint>] [--model <id>]", Usage: "/login [provider] [api-key] [--url https://host/v1] [--model <id>]", Handler: handleLogin},
 		"logout":        {Name: "logout", Description: "Remove provider credentials: /logout [provider]", Usage: "/logout [provider]", Handler: handleLogout},
 		"new":           {Name: "new", Description: "Start a new session", Usage: "/new", Handler: handleNew},
 		"clear":         {Name: "clear", Description: "Clear current session (alias /new)", Usage: "/clear", Handler: handleNew},
@@ -197,43 +249,97 @@ func handleModel(m *Model, args string) tea.Cmd {
 	return nil
 }
 
-func handleLogin(m *Model, args string) tea.Cmd {
+// parseLoginArgs splits "/login [provider] [key] [--url <endpoint>] [--model <id>]".
+// Unknown provider names are accepted as custom OpenAI-compatible endpoints
+// (requires --url). Returns provider="" when only flags were given.
+func parseLoginArgs(args string) (providerName, apiKey, baseURL, model string, err error) {
 	parts := strings.Fields(args)
-	if len(parts) == 0 {
+	var positional []string
+	for i := 0; i < len(parts); i++ {
+		switch strings.ToLower(parts[i]) {
+		case "--url", "-u":
+			if i+1 >= len(parts) {
+				return "", "", "", "", fmt.Errorf("--url requires a value")
+			}
+			i++
+			baseURL = parts[i]
+		case "--key", "-k":
+			if i+1 >= len(parts) {
+				return "", "", "", "", fmt.Errorf("--key requires a value")
+			}
+			i++
+			apiKey = parts[i]
+		case "--model", "-m":
+			if i+1 >= len(parts) {
+				return "", "", "", "", fmt.Errorf("--model requires a value")
+			}
+			i++
+			model = parts[i]
+		default:
+			positional = append(positional, parts[i])
+		}
+	}
+	if len(positional) > 0 {
+		providerName = strings.ToLower(positional[0])
+	}
+	if apiKey == "" && len(positional) > 1 {
+		apiKey = strings.Join(positional[1:], " ")
+	}
+	if baseURL != "" && !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return "", "", "", "", fmt.Errorf("--url must start with http:// or https://")
+	}
+	return providerName, apiKey, baseURL, model, nil
+}
+
+func handleLogin(m *Model, args string) tea.Cmd {
+	providerName, apiKey, baseURL, model, perr := parseLoginArgs(args)
+	if perr != nil {
+		m.appendSystem(errorStyle.Render("/login: " + perr.Error()))
+		return nil
+	}
+	known := map[string]bool{"openai": true, "anthropic": true, "gemini": true, "ollama": true, "openrouter": true, "groq": true, "deepseek": true, "opencode-go": true}
+	if providerName == "" {
 		// picker provider — arrow+Enter
 		m.openProviderPicker("")
 		return nil
 	}
-	if len(parts) == 1 {
-		// provider saja tanpa key → buka picker filtered atau lanjut minta key
-		known := map[string]bool{"openai": true, "anthropic": true, "gemini": true, "ollama": true, "openrouter": true, "groq": true, "deepseek": true, "opencode-go": true}
-		if !known[strings.ToLower(parts[0])] {
-			m.openProviderPicker(parts[0])
-			return nil
-		}
-	}
-	providerName := strings.ToLower(parts[0])
-	apiKey := ""
-	if len(parts) > 1 {
-		apiKey = strings.Join(parts[1:], " ")
-	} else {
-		m.viewport.SetContent(errorStyle.Render("Missing api-key. Usage: /login " + providerName + " <api-key>"))
-		m.viewport.GotoBottom()
+	if !known[providerName] && baseURL == "" {
+		// provider tidak dikenal: boleh, tapi wajib --url. Tampilkan petunjuk.
+		m.appendSystem(helpStyle.Render(fmt.Sprintf(
+			"Provider '%s' is not built-in. Use a custom endpoint:\n"+
+				"  /login %s <api-key> --url https://my-server.example.com/v1 [--model some-model]\n"+
+				"Or pick a built-in: %s",
+			providerName, providerName, "openai, anthropic, gemini, ollama, openrouter, groq, deepseek, opencode-go")))
+		m.openProviderPicker(providerName)
 		return nil
 	}
-	if err := savePiAuth(providerName, apiKey); err != nil {
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Failed to save: %v", err)))
-		m.viewport.GotoBottom()
+	if apiKey == "" && baseURL == "" {
+		m.openProviderPicker(providerName)
 		return nil
 	}
-	// also try to switch provider to this one if current is different
-	m.appendSystem(fmt.Sprintf("✓ Saved key for %s to ~/.pi/agent/auth.json", providerName))
-	if pvd, modelName, err := provider.ResolveProvider(provider.Config{Provider: providerName, APIKey: apiKey}); err == nil {
+	if apiKey == "" && baseURL != "" && !strings.Contains(baseURL, "localhost") && !strings.Contains(baseURL, "127.0.0.1") {
+		m.appendSystem(errorStyle.Render("Missing api-key. Usage: /login "+providerName+" <api-key> --url <endpoint>"))
+		return nil
+	}
+	if err := savePiAuth(providerName, apiKey, baseURL); err != nil {
+		m.appendSystem(errorStyle.Render(fmt.Sprintf("Failed to save: %v", err)))
+		return nil
+	}
+	msg := fmt.Sprintf("✓ Saved key for %s to ~/.pi/agent/auth.json", providerName)
+	if baseURL != "" {
+		msg += " (endpoint: " + baseURL + ")"
+	}
+	m.appendSystem(msg)
+	if pvd, modelName, err := provider.ResolveProvider(provider.Config{Provider: providerName, APIKey: apiKey, BaseURL: baseURL, Model: model}); err == nil {
 		m.engine.Config.Provider = pvd
-		if modelName != "" {
+		if model != "" {
+			m.engine.Config.Model = model
+		} else if modelName != "" {
 			m.engine.Config.Model = modelName
 		}
-		m.appendSystem(fmt.Sprintf("✓ Provider switched to %s", pvd.Name()))
+		m.appendSystem(fmt.Sprintf("✓ Provider switched to %s (model: %s)", pvd.Name(), m.engine.Config.Model))
+	} else {
+		m.appendSystem(errorStyle.Render("Saved, but could not activate now: "+err.Error()))
 	}
 	return nil
 }
@@ -548,7 +654,7 @@ func piAgentDirTUI() string {
 	return filepath.Join(home, ".pi", "agent")
 }
 
-func savePiAuth(provider, key string) error {
+func savePiAuth(provider, key, baseURL string) error {
 	dir := piAgentDirTUI()
 	if dir == "" {
 		return fmt.Errorf("no home dir")
@@ -565,7 +671,15 @@ func savePiAuth(provider, key string) error {
 	if m == nil {
 		m = make(map[string]map[string]string)
 	}
-	m[strings.ToLower(provider)] = map[string]string{"type": "api_key", "key": key}
+	rec := map[string]string{"type": "api_key", "key": key}
+	if baseURL != "" {
+		rec["baseUrl"] = baseURL
+	} else if old, ok := m[strings.ToLower(provider)]; ok {
+		if u, ok := old["baseUrl"]; ok {
+			rec["baseUrl"] = u // preserve previously stored URL
+		}
+	}
+	m[strings.ToLower(provider)] = rec
 	out, _ := json.MarshalIndent(m, "", "  ")
 	return os.WriteFile(path, out, 0600)
 }

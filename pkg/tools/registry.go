@@ -58,5 +58,6 @@ func DefaultRegistry() *Registry {
 	r.Register(NewBashTool())
 	r.Register(NewGlobTool())
 	r.Register(NewGrepTool())
+	r.Register(NewTodoTool())
 	return r
 }

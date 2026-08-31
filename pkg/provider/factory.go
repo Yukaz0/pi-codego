@@ -88,8 +88,13 @@ func ResolveProvider(cfg Config) (types.Provider, string, error) {
 		}
 		authMap := loadPiAuth()
 		if authMap != nil {
-			if rec, ok := authMap[strings.ToLower(provider)]; ok && rec.Key != "" {
-				apiKey = rec.Key
+			if rec, ok := authMap[strings.ToLower(provider)]; ok {
+				if rec.Key != "" {
+					apiKey = rec.Key
+				}
+				if baseURLFromCfg == "" && rec.BaseURL != "" {
+					baseURLFromCfg = rec.BaseURL
+				}
 			}
 		}
 		if baseURLFromCfg == "" {
@@ -244,6 +249,9 @@ func ResolveProvider(cfg Config) (types.Provider, string, error) {
 				apiKey = rec.Key
 				baseURL := baseURLFromCfg
 				if baseURL == "" {
+					baseURL = rec.BaseURL
+				}
+				if baseURL == "" {
 					baseURL = loadPiBaseURL(providerName, modelName)
 					if baseURL == "" {
 						baseURL = "https://opencode.ai/zen/go/v1"
@@ -260,8 +268,9 @@ func ResolveProvider(cfg Config) (types.Provider, string, error) {
 // --- pi npm interop: baca ~/.pi/agent/auth.json & settings.json & models-store.json ---
 
 type piAuthEntry struct {
-	Type string `json:"type"`
-	Key  string `json:"key"`
+	Type    string `json:"type"`
+	Key     string `json:"key"`
+	BaseURL string `json:"baseUrl,omitempty"`
 }
 
 type piSettings struct {

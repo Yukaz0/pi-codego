@@ -37,6 +37,13 @@ var (
 	warningStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ffff00"))
 
+	suggestionStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#9aa5b1")).
+			Padding(0, 1)
+	suggestionActiveStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#e6e6e6")).
+				Background(lipgloss.Color("#2d333b")).
+				Padding(0, 1)
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666666"))
 
