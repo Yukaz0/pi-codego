@@ -1,0 +1,980 @@
+package tui
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"pi/pkg/agent"
+	"pi/pkg/session"
+	"pi/pkg/types"
+)
+
+// TUI messages
+type contentDeltaMsg string
+type toolStartMsg struct{ Tool, Args string }
+type toolEndMsg struct {
+	Tool, Result string
+	IsError      bool
+}
+type turnDoneMsg struct{ Err error }
+type statusMsg string
+type gitTickMsg time.Time
+
+type Model struct {
+	engine *agent.Engine
+	keys   KeyMap
+
+	viewport viewport.Model
+	textarea textarea.Model
+	spinner  spinner.Model
+
+	width  int
+	height int
+
+	history      []types.Message
+	streamBuffer strings.Builder
+	streaming    bool
+	showHelp     bool
+	errMsg       string
+	ctx          context.Context
+	cancel       context.CancelFunc
+
+	// TUI-specific display state
+	thinkingMode string // "off", "minimal", "low", "medium", "high", "xhigh", "max"
+	gitBranch    string
+	tokens       int
+	usage        *sessionUsage // shared accumulator so listeners on Model copies report back
+	bgTasks      map[string]string // id -> label
+	bgCounter    int
+	sessionName  string
+
+	// session persistence
+	storage   *session.Storage
+	sessionID string
+
+	// generic picker — arrow + enter navigation for all pick operations
+	picker pickerState
+}
+
+type pickerState struct {
+	active     bool
+	title      string
+	items      []string // filtered list (what user sees)
+	baseItems  []string // unfiltered source (for re-filter on query change)
+	cursor     int
+	onConfirm  func(string) tea.Cmd
+	searchable bool
+	query      textinput.Model
+	queryEmpty bool // true until user types anything; controls Esc behavior
+}
+
+func NewModel(engine *agent.Engine) Model {
+	ta := textarea.New()
+	ta.Placeholder = "Ask Pi…  Enter to send  ·  / for commands  ·  ! for bash"
+	ta.Focus()
+	ta.CharLimit = 8000
+	ta.SetWidth(80)
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	// Pi-style: no border, no background — plain editor with prompt cursor.
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	ta.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4d4d4"))
+	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#8abeb7")).Bold(true)
+	ta.BlurredStyle.Base = lipgloss.NewStyle()
+	ta.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	ta.BlurredStyle.Text = lipgloss.NewStyle()
+	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#8abeb7")).Bold(true)
+
+	vp := viewport.New(80, 20)
+	vp.SetContent(renderAssistantText("Welcome to Pi — coding agent. Type a message and press Enter, or `/help` for commands."))
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = spinnerStyle
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return Model{
+		engine:       engine,
+		keys:         DefaultKeyMap(),
+		viewport:     vp,
+		textarea:     ta,
+		spinner:      sp,
+		history:      []types.Message{},
+		ctx:          ctx,
+		cancel:       cancel,
+		thinkingMode: "medium",
+		gitBranch:    detectGitBranch(),
+		bgTasks:      map[string]string{},
+		usage:        &sessionUsage{},
+	}
+}
+
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(textarea.Blink, m.spinner.Tick, gitTickCmd())
+}
+
+func gitTickCmd() tea.Cmd {
+	return tea.Tick(5*60_000_000_000, func(t time.Time) tea.Msg { return gitTickMsg(t) })
+}
+
+func detectGitBranch() string {
+	out, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var (
+		tiCmd tea.Cmd
+		vpCmd tea.Cmd
+	)
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.viewport.Width = msg.Width
+		// leave room for: header(1) + footer(1) + input(3) + status(1)
+		m.viewport.Height = msg.Height - 7
+		m.textarea.SetWidth(msg.Width - 4)
+		return m, nil
+
+	case gitTickMsg:
+		m.gitBranch = detectGitBranch()
+		return m, gitTickCmd()
+
+	case tea.KeyMsg:
+		// picker takes priority
+		if m.picker.active {
+			// Route printable / backspace keys to the search input when searchable.
+			// Esc clears the query first if non-empty, otherwise closes the picker.
+			if m.picker.searchable {
+				switch msg.String() {
+				case "esc":
+					if !m.picker.queryEmpty {
+						m.picker.query.SetValue("")
+						m.picker.queryEmpty = true
+						m.recomputePicker()
+						return m, nil
+					}
+					m.picker.active = false
+					m.appendSystem(m.picker.title + " cancelled")
+					return m, nil
+				case "enter":
+					return m, m.confirmPicker()
+				case "up", "ctrl+p":
+					if m.picker.cursor > 0 {
+						m.picker.cursor--
+					}
+					return m, nil
+				case "down", "ctrl+n":
+					if m.picker.cursor < len(m.picker.items)-1 {
+						m.picker.cursor++
+					}
+					return m, nil
+				}
+				// forward to textinput for printable + backspace + delete handling
+				prev := m.picker.query.Value()
+				var tiCmd tea.Cmd
+				m.picker.query, tiCmd = m.picker.query.Update(msg)
+				if m.picker.query.Value() != prev {
+					m.picker.queryEmpty = m.picker.query.Value() == ""
+					m.recomputePicker()
+				}
+				return m, tiCmd
+			}
+			// non-searchable picker — original behavior
+			switch msg.String() {
+			case "up", "k", "ctrl+p":
+				if m.picker.cursor > 0 {
+					m.picker.cursor--
+				}
+				return m, nil
+			case "down", "j", "ctrl+n":
+				if m.picker.cursor < len(m.picker.items)-1 {
+					m.picker.cursor++
+				}
+				return m, nil
+			case "enter":
+				return m, m.confirmPicker()
+			case "esc", "ctrl+c", "ctrl+q":
+				m.picker.active = false
+				m.appendSystem(m.picker.title + " cancelled")
+				return m, nil
+			}
+			return m, nil
+		}
+		switch msg.String() {
+		case "ctrl+c", "ctrl+q":
+			if m.streaming {
+				if m.cancel != nil {
+					m.cancel()
+					m.ctx, m.cancel = context.WithCancel(context.Background())
+				}
+				m.streaming = false
+				m.appendSystem("[interrupted]")
+				return m, nil
+			}
+			return m, tea.Quit
+		case "ctrl+l":
+			m.viewport.SetContent("")
+			m.history = nil
+			m.streamBuffer.Reset()
+			return m, nil
+		case "?":
+			// "?" toggles the help line only when the input is empty and
+			// idle; otherwise it must reach the textarea so users can type
+			// questions ending in "?".
+			if strings.TrimSpace(m.textarea.Value()) == "" && !m.streaming {
+				m.showHelp = !m.showHelp
+				return m, nil
+			}
+		case "ctrl+p":
+			cur := strings.TrimSpace(m.textarea.Value())
+			filter := ""
+			if strings.HasPrefix(cur, "/") {
+				filter = strings.TrimPrefix(cur, "/")
+			}
+			m.openCommandPicker(filter)
+			return m, nil
+		case "ctrl+o":
+			cur := strings.TrimSpace(m.textarea.Value())
+			filter := ""
+			if strings.HasPrefix(cur, "/model") {
+				filter = strings.TrimSpace(strings.TrimPrefix(cur, "/model"))
+			}
+			m.openModelPicker(filter)
+			return m, nil
+		case "ctrl+t":
+			// quick cycle thinking mode (off → minimal → low → medium → high → xhigh → max)
+			m.cycleThinking()
+			return m, nil
+		case "y":
+			if last := m.lastAssistantText(); last != "" {
+				_ = copyToClipboard(last)
+				m.appendSystem("✓ copied last answer to clipboard")
+			}
+			return m, nil
+		case "ctrl+y":
+			// copy last code block
+			if code := m.lastCodeBlock(); code != "" {
+				_ = copyToClipboard(code)
+				m.appendSystem("✓ copied last code block to clipboard")
+			} else {
+				m.appendSystem("No code block to copy")
+			}
+			return m, nil
+		case "enter":
+			if m.streaming {
+				text := strings.TrimSpace(m.textarea.Value())
+				if text != "" {
+					m.engine.Steering.Steer(text)
+					m.appendUser(text + " (steered)")
+					m.textarea.Reset()
+				}
+				return m, nil
+			}
+			text := strings.TrimSpace(m.textarea.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.textarea.Reset()
+			// bash mode `! ...` — run without LLM; `!! ...` — run then feed output to LLM
+			if strings.HasPrefix(text, "!") {
+				withLLM := strings.HasPrefix(text, "!!")
+				cmd := strings.TrimSpace(strings.TrimLeft(text, "!"))
+				if cmd != "" {
+					m.appendUser(text)
+					if withLLM {
+						return m, m.runBashAndAsk(cmd)
+					}
+					m.runBash(cmd)
+				}
+				return m, nil
+			}
+			// slash command intercept
+			if strings.HasPrefix(text, "/") {
+				handled, cmd, expandPrompt := handleSlash(&m, text)
+				if handled {
+					if expandPrompt == "" {
+						return m, cmd
+					}
+					// prompt template: show original input, send expanded
+					m.appendUser(text)
+					m.streaming = true
+					m.streamBuffer.Reset()
+					m.errMsg = ""
+					return m, tea.Batch(m.spinner.Tick, m.runTurn(expandPrompt))
+				}
+			}
+			m.appendUser(text)
+			m.streaming = true
+			m.streamBuffer.Reset()
+			m.errMsg = ""
+			return m, tea.Batch(
+				m.spinner.Tick,
+				m.runTurn(expandFileRefs(text)),
+			)
+		}
+
+	case contentDeltaMsg:
+		m.streamBuffer.WriteString(string(msg))
+		m.refreshViewport()
+		return m, nil
+
+	case toolStartMsg:
+		m.refreshViewport()
+		return m, nil
+
+	case toolEndMsg:
+		m.refreshViewport()
+		return m, nil
+
+	case turnDoneMsg:
+		m.streaming = false
+		if msg.Err != nil && msg.Err != context.Canceled {
+			m.errMsg = msg.Err.Error()
+			m.appendSystem("error: " + msg.Err.Error())
+		} else {
+			if m.engine != nil && m.engine.Config.SessionTree != nil {
+				m.history = m.engine.Config.SessionTree.GetLinearHistory("")
+			}
+			m.streamBuffer.Reset()
+			m.refreshViewport()
+			if last := m.lastAssistantText(); last != "" {
+				_ = copyToClipboard(last)
+				m.tokens = len(last) / 4
+			}
+		}
+		m.autoSaveSession()
+		m.viewport.GotoBottom()
+		return m, nil
+
+	case statusMsg:
+		m.appendSystem(string(msg))
+		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
+	m.textarea, tiCmd = m.textarea.Update(msg)
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	return m, tea.Batch(tiCmd, vpCmd)
+}
+
+func (m Model) View() string {
+	if m.width == 0 {
+		return "loading..."
+	}
+	header := renderHeader(m.width, m.engine.Config.Model)
+
+	mainView := m.viewport.View()
+	if m.picker.active {
+		var qView string
+		if m.picker.searchable {
+			qView = m.picker.query.View()
+		}
+		mainView = renderPicker(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView)
+	}
+
+	// status line
+	status := ""
+	if m.streaming {
+		status = spinnerStyle.Render(m.spinner.View()) + statusStyle.Render(" Pi is thinking…  (Enter to steer · Ctrl+C to interrupt)")
+	} else if m.errMsg != "" {
+		status = errorStyle.Render(m.errMsg)
+	} else if m.showHelp {
+		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
+	}
+
+	input := m.textarea.View()
+	if m.picker.active {
+		input = helpStyle.Render("↑/↓ move · Enter select · Esc cancel")
+	}
+
+	// footer
+	provName := ""
+	if m.engine != nil && m.engine.Config.Provider != nil {
+		provName = m.engine.Config.Provider.Name()
+	}
+	cwd, _ := os.Getwd()
+	bgLabels := make([]string, 0, len(m.bgTasks))
+	for _, l := range m.bgTasks {
+		bgLabels = append(bgLabels, l)
+	}
+	footerData := FooterData{
+		Cwd:           cwd,
+		Branch:        m.gitBranch,
+		SessionName:   m.sessionName,
+		Model:         m.engine.Config.Model,
+		Provider:      provName,
+		ThinkingLevel: m.thinkingMode,
+		BgTasks:       bgLabels,
+	}
+	footer := renderFooter(footerData, m.width)
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		mainView,
+		status,
+		input,
+		footer,
+	)
+}
+
+// appendUser adds a user message to history + viewport using Pi-style bubble (Box bg, no border)
+func (m *Model) appendUser(text string) {
+	m.history = append(m.history, types.NewUserMessage(text))
+	m.viewport.SetContent(m.viewport.View() + "\n" + renderUserBubble(text, m.width))
+	m.viewport.GotoBottom()
+}
+
+func (m *Model) appendSystem(text string) {
+	m.viewport.SetContent(m.viewport.View() + "\n" + statusStyle.Render(text))
+	m.viewport.GotoBottom()
+}
+
+// refreshViewport rebuilds the viewport content from history with Pi-style rendering:
+// user messages → bubble (Box bg), assistant → plain markdown, tools → bubble by state
+func (m *Model) refreshViewport() {
+	var sb strings.Builder
+	for _, h := range m.history {
+		switch h.Role {
+		case types.RoleUser:
+			sb.WriteString(renderUserBubble(h.Content, m.width) + "\n")
+		case types.RoleAssistant:
+			if h.Content != "" {
+				sb.WriteString(renderAssistantText(h.Content) + "\n")
+			}
+			for _, tc := range h.ToolCalls {
+				sb.WriteString(renderToolPending(tc.Function.Name, tc.Function.Arguments) + "\n")
+			}
+		case types.RoleTool:
+			for _, tr := range h.ToolResults {
+				isErr := tr.IsError
+				toolName := ""
+				// find matching tool call
+				for i := len(m.history) - 1; i >= 0; i-- {
+					if m.history[i].Role == types.RoleAssistant {
+						for _, tc := range m.history[i].ToolCalls {
+							if tc.ID == tr.ToolCallID {
+								toolName = tc.Function.Name
+								break
+							}
+						}
+						if toolName != "" {
+							break
+						}
+					}
+				}
+				if toolName == "" {
+					toolName = "tool"
+				}
+				body := truncate(tr.Content, 300)
+				if tr.Content == "" {
+					body = ""
+				}
+				sb.WriteString(renderToolBubble(toolName, body, isErr) + "\n")
+			}
+		case types.RoleSystem:
+			sb.WriteString(statusStyle.Render(h.Content) + "\n")
+		}
+	}
+	// current streaming buffer — plain markdown
+	if m.streamBuffer.Len() > 0 {
+		sb.WriteString(renderAssistantText(m.streamBuffer.String()))
+	}
+	m.viewport.SetContent(sb.String())
+	m.viewport.GotoBottom()
+}
+
+func (m *Model) lastAssistantText() string {
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i].Role == types.RoleAssistant && m.history[i].Content != "" {
+			return m.history[i].Content
+		}
+	}
+	if m.streamBuffer.Len() > 0 {
+		return m.streamBuffer.String()
+	}
+	return ""
+}
+
+func (m *Model) lastCodeBlock() string {
+	text := m.lastAssistantText()
+	if text == "" {
+		return ""
+	}
+	// find last ``` fenced code block
+	lines := strings.Split(text, "\n")
+	inCode := false
+	var block []string
+	var last []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "```") {
+			if inCode {
+				if len(block) > 0 {
+					last = block
+				}
+				block = nil
+				inCode = false
+			} else {
+				inCode = true
+			}
+			continue
+		}
+		if inCode {
+			block = append(block, l)
+		}
+	}
+	return strings.Join(last, "\n")
+}
+
+func (m *Model) cycleThinking() {
+	order := []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+	next := "medium"
+	for i, v := range order {
+		if v == m.thinkingMode {
+			next = order[(i+1)%len(order)]
+			break
+		}
+	}
+	m.setThinking(next)
+}
+
+// setThinking updates the TUI label and the engine config in one place.
+func (m *Model) setThinking(level string) {
+	m.thinkingMode = level
+	m.engine.Config.ThinkingLevel = level
+	m.appendSystem("Thinking: " + level)
+}
+
+// contextWindowForModel returns a best-effort context window size used for
+// the footer's usage percentage. Unknown models return 0 (indicator hidden).
+func contextWindowForModel(model string) int {
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "gemini"):
+		return 1_000_000
+	case strings.Contains(m, "claude"):
+		if strings.Contains(m, "sonnet-4") || strings.Contains(m, "opus") {
+			return 200_000
+		}
+		return 200_000
+	case strings.Contains(m, "gpt-4.1"), strings.Contains(m, "o3"), strings.Contains(m, "o4"):
+		return 200_000
+	case strings.Contains(m, "gpt-4o"), strings.Contains(m, "gpt-5"):
+		return 128_000
+	case strings.Contains(m, "llama-3"), strings.Contains(m, "qwen2.5"), strings.Contains(m, "deepseek"):
+		return 128_000
+	case strings.Contains(m, "gpt-4.1-nano"), strings.Contains(m, "haiku"):
+		return 200_000
+	}
+	return 0
+}
+
+// runBash executes a `!` command and shows result in a bash bubble.
+func (m *Model) runBash(command string) {
+	cmd := exec.Command("bash", "-c", command)
+	out, err := cmd.CombinedOutput()
+	exit := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exit = ee.ExitCode()
+		} else {
+			exit = -1
+		}
+	}
+	m.viewport.SetContent(m.viewport.View() + "\n" + renderBashResult(command, strings.TrimRight(string(out), "\n"), exit, err != nil))
+	m.viewport.GotoBottom()
+}
+
+// runBashAndAsk executes a `!!` command, shows its output, then sends the
+// output to the LLM as context for the next turn.
+func (m *Model) runBashAndAsk(command string) tea.Cmd {
+	cmd := exec.Command("bash", "-c", command)
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimRight(string(out), "\n")
+	if len(output) > 8000 {
+		output = output[:4000] + "\n…[truncated]…\n" + output[len(output)-4000:]
+	}
+	exit := 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exit = ee.ExitCode()
+		} else {
+			exit = -1
+		}
+	}
+	m.viewport.SetContent(m.viewport.View() + "\n" + renderBashResult(command, output, exit, err != nil))
+	m.viewport.GotoBottom()
+	prompt := fmt.Sprintf("I ran the shell command `%s` (exit %d). Its output:\n\n```\n%s\n```\n\nExplain/analyze the output.", command, exit, output)
+	m.streaming = true
+	m.streamBuffer.Reset()
+	m.errMsg = ""
+	return tea.Batch(m.spinner.Tick, m.runTurn(prompt))
+}
+
+// atRefRe matches @file references in user input (Pi @-mention feature).
+var atRefRe = regexp.MustCompile(`(^|\s)@([^\s@]{1,200})`)
+
+// expandFileRefs replaces @path tokens with the file content inline so the
+// model actually sees referenced files. Directories and unreadable/oversized
+// paths are left as-is.
+func expandFileRefs(text string) string {
+	cwd, _ := os.Getwd()
+	return atRefRe.ReplaceAllStringFunc(text, func(match string) string {
+		parts := atRefRe.FindStringSubmatch(match)
+		if parts == nil {
+			return match
+		}
+		path := parts[2]
+		abs := path
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(cwd, abs)
+		}
+		fi, err := os.Stat(abs)
+		if err != nil || fi.IsDir() || fi.Size() > 256*1024 {
+			return match
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return match
+		}
+		return fmt.Sprintf("%s@%s\n```\n%s\n```", parts[1], path, string(data))
+	})
+}
+
+// generic picker core. When searchable=true, an inline text input is rendered above
+// the list; typing filters by case-insensitive substring match; Esc clears the query
+// first, then closes the picker on a second press.
+func (m *Model) openPicker(title string, items []string, onConfirm func(string) tea.Cmd, searchable bool) {
+	if len(items) == 0 {
+		items = []string{"(no items)"}
+	}
+	q := textinput.New()
+	q.Placeholder = "type to filter…"
+	q.Prompt = "🔎 "
+	q.CharLimit = 64
+	q.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#666666"))
+	q.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#8abeb7")).Bold(true)
+	q.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#d4d4d4"))
+	if searchable {
+		q.Focus()
+	}
+	m.picker = pickerState{
+		active:     true,
+		title:      title,
+		items:      append([]string(nil), items...),
+		baseItems:  append([]string(nil), items...),
+		cursor:     0,
+		onConfirm:  onConfirm,
+		searchable: searchable,
+		query:      q,
+		queryEmpty: true,
+	}
+}
+
+// recomputePicker applies the current query to baseItems and resets cursor.
+func (m *Model) recomputePicker() {
+	q := strings.ToLower(strings.TrimSpace(m.picker.query.Value()))
+	if q == "" {
+		m.picker.items = append([]string(nil), m.picker.baseItems...)
+	} else {
+		filtered := make([]string, 0, len(m.picker.baseItems))
+		for _, it := range m.picker.baseItems {
+			if strings.Contains(strings.ToLower(it), q) {
+				filtered = append(filtered, it)
+			}
+		}
+		if len(filtered) == 0 {
+			filtered = []string{"(no matches)"}
+		}
+		m.picker.items = filtered
+	}
+	if m.picker.cursor >= len(m.picker.items) {
+		m.picker.cursor = 0
+	}
+}
+
+func (m *Model) filterItems(items []string, filter string) []string {
+	if strings.TrimSpace(filter) == "" {
+		return items
+	}
+	f := strings.ToLower(strings.TrimSpace(filter))
+	var out []string
+	for _, it := range items {
+		if strings.Contains(strings.ToLower(it), f) {
+			out = append(out, it)
+		}
+	}
+	if len(out) == 0 {
+		return items
+	}
+	return out
+}
+
+func (m *Model) openModelPicker(filter string) {
+	items := m.filterItems(m.availableModels(), filter)
+	if len(items) == 0 {
+		items = []string{"openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet", "gemini/gemini-1.5-flash", "ollama/llama3"}
+	}
+	cur := m.engine.Config.Model
+	if m.engine.Config.Provider != nil && !strings.Contains(cur, "/") {
+		cur = m.engine.Config.Provider.Name() + "/" + cur
+	}
+	cursor := 0
+	for i, it := range items {
+		if strings.EqualFold(it, cur) {
+			cursor = i
+			break
+		}
+	}
+	m.openPicker("Select model — "+cur, items, func(sel string) tea.Cmd {
+		sel = strings.ReplaceAll(sel, " ", "/")
+		m.applyModelSelection(sel)
+		return nil
+	}, true)
+	m.picker.cursor = cursor
+}
+
+func (m *Model) confirmPicker() tea.Cmd {
+	if !m.picker.active || len(m.picker.items) == 0 {
+		m.picker.active = false
+		return nil
+	}
+	sel := m.picker.items[m.picker.cursor]
+	cb := m.picker.onConfirm
+	m.picker.active = false
+	if cb != nil {
+		return cb(sel)
+	}
+	return nil
+}
+
+func (m *Model) applyModelSelection(modelArg string) {
+	handleModel(m, modelArg)
+}
+
+func (m *Model) openProviderPicker(filter string) {
+	providers := []string{"openai", "anthropic", "gemini", "ollama", "openrouter", "groq", "deepseek", "opencode-go"}
+	items := m.filterItems(providers, filter)
+	m.openPicker("Select provider", items, func(sel string) tea.Cmd {
+		m.textarea.SetValue("/login " + sel + " ")
+		m.appendSystem("Provider " + sel + " selected — type API key then Enter (or /login " + sel + " <key>)")
+		return nil
+	}, false)
+}
+
+func (m *Model) openCommandPicker(filter string) {
+	var items []string
+	for name, c := range slashCommands {
+		label := "/" + name + " — " + c.Description
+		items = append(items, label)
+	}
+	// include prompt templates as /name (args)
+	if m.engine != nil && m.engine.Config.PromptLoader != nil {
+		for _, tpl := range m.engine.Config.PromptLoader.LoadAll() {
+			desc := tpl.Description
+			if desc == "" {
+				desc = "prompt template"
+			}
+			items = append(items, "/"+tpl.Name+" — "+desc)
+		}
+	}
+	sort.Strings(items)
+	items = m.filterItems(items, filter)
+	m.openPicker("Select command", items, func(sel string) tea.Cmd {
+		cmd := strings.Fields(sel)[0]
+		if idx := strings.Index(sel, " —"); idx > 0 {
+			cmd = strings.TrimSpace(sel[:idx])
+		}
+		handled, _, expandPrompt := handleSlash(m, cmd)
+		if handled && expandPrompt != "" {
+			m.appendUser(cmd)
+			m.streaming = true
+			m.streamBuffer.Reset()
+			m.errMsg = ""
+			m.textarea.SetValue("")
+			return m.runTurn(expandPrompt)
+		}
+		m.textarea.SetValue(cmd + " ")
+		m.appendSystem("Selected " + cmd + " — type arg then Enter, or Enter again to open picker list")
+		return nil
+	}, true)
+}
+
+func (m *Model) availableModels() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range loadFavorites() {
+		if !seen[strings.ToLower(f)] {
+			out = append(out, f)
+			seen[strings.ToLower(f)] = true
+		}
+	}
+	if dir := piAgentDirTUI(); dir != "" {
+		if data, err := os.ReadFile(filepath.Join(dir, "models-store.json")); err == nil {
+			var raw map[string]struct {
+				Models []struct {
+					ID  string `json:"id"`
+					API string `json:"api"`
+				} `json:"models"`
+			}
+			if json.Unmarshal(data, &raw) == nil {
+				for prov, entry := range raw {
+					for _, mod := range entry.Models {
+						if mod.API == "openai-responses" {
+							continue
+						}
+						full := prov + "/" + mod.ID
+						if !seen[strings.ToLower(full)] {
+							out = append(out, full)
+							seen[strings.ToLower(full)] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = []string{"openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet", "gemini/gemini-1.5-flash", "ollama/llama3"}
+	}
+	return out
+}
+
+func (m Model) runTurn(prompt string) tea.Cmd {
+	engine := m.engine
+	ctx := m.ctx
+	return func() tea.Msg {
+		var buf strings.Builder
+		capture := &captureListener{buf: &buf, model: m}
+		orig := engine.Config.Listener
+		engine.Config.Listener = &chainedTUIListener{primary: capture, secondary: orig}
+		err := engine.RunTurn(ctx, prompt)
+		engine.Config.Listener = orig
+		_ = buf.String()
+		return turnDoneMsg{Err: err}
+	}
+}
+
+// captureListener forwards events to the TUI as messages for live rendering.
+type captureListener struct {
+	buf   *strings.Builder
+	model Model
+}
+
+func (l *captureListener) OnTurnStart()                {}
+func (l *captureListener) OnTurnEnd()                  {}
+func (l *captureListener) OnContentDelta(delta string) { l.buf.WriteString(delta) }
+func (l *captureListener) OnToolExecutionStart(toolName string, argsJSON string) {
+	// toolStartMsg is sent via tea program; we can't call tea here from arbitrary goroutine,
+	// so the engine caller (model.runTurn) handles appending via session tree -> refreshViewport
+}
+func (l *captureListener) OnToolExecutionEnd(toolName string, result string, isError bool) {
+}
+func (l *captureListener) OnUsage(usage types.TokenUsage) {
+	if l.model.usage == nil {
+		return
+	}
+	l.model.usage.InputTokens += usage.PromptTokens
+	l.model.usage.OutputTokens += usage.CompletionTokens
+	l.model.usage.ContextUsed = usage.PromptTokens
+	l.model.usage.CacheRead += usage.CacheReadTokens
+	l.model.usage.CacheWrite += usage.CacheWriteTokens
+}
+func (l *captureListener) OnError(err error) {}
+
+// chainedTUIListener forwards to both capture and original
+type chainedTUIListener struct {
+	primary   agent.EventListener
+	secondary agent.EventListener
+}
+
+func (c *chainedTUIListener) OnTurnStart() {
+	if c.primary != nil {
+		c.primary.OnTurnStart()
+	}
+	if c.secondary != nil {
+		c.secondary.OnTurnStart()
+	}
+}
+func (c *chainedTUIListener) OnTurnEnd() {
+	if c.primary != nil {
+		c.primary.OnTurnEnd()
+	}
+	if c.secondary != nil {
+		c.secondary.OnTurnEnd()
+	}
+}
+func (c *chainedTUIListener) OnContentDelta(delta string) {
+	if c.primary != nil {
+		c.primary.OnContentDelta(delta)
+	}
+	if c.secondary != nil {
+		c.secondary.OnContentDelta(delta)
+	}
+}
+func (c *chainedTUIListener) OnUsage(usage types.TokenUsage) {
+	if c.primary != nil {
+		c.primary.OnUsage(usage)
+	}
+	if c.secondary != nil {
+		c.secondary.OnUsage(usage)
+	}
+}
+func (c *chainedTUIListener) OnToolExecutionStart(tool string, args string) {
+	if c.primary != nil {
+		c.primary.OnToolExecutionStart(tool, args)
+	}
+	if c.secondary != nil {
+		c.secondary.OnToolExecutionStart(tool, args)
+	}
+}
+func (c *chainedTUIListener) OnToolExecutionEnd(tool string, result string, isError bool) {
+	if c.primary != nil {
+		c.primary.OnToolExecutionEnd(tool, result, isError)
+	}
+	if c.secondary != nil {
+		c.secondary.OnToolExecutionEnd(tool, result, isError)
+	}
+}
+func (c *chainedTUIListener) OnError(err error) {
+	if c.primary != nil {
+		c.primary.OnError(err)
+	}
+	if c.secondary != nil {
+		c.secondary.OnError(err)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}

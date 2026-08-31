@@ -1,0 +1,53 @@
+# Binaries
+/bin/
+/bin/pi
+/pi
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+vendor/
+go.work
+go.work.sum
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Env & secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Sessions & local data (di luar repo)
+.pi/
+sessions/
+*.jsonl
+
+# Build cache
+
+# Temp
+/tmp/
+*.tmp
+*.log
+
+# Coverage
+coverage.out
+coverage.html
+*.cover
+
+# Release artifacts & local tool data
+/dist/
+.commandcode/
+graphify-out/
