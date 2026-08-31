@@ -30,8 +30,8 @@ func (t *TodoTool) Definition() types.ToolDefinition {
 		Parameters: types.ToolParameterSchema{
 			Type: "object",
 			Properties: map[string]types.PropertyDef{
-				"action": {Type: "string", Description: "One of: list, add, update, done, clear"},
-				"id":     {Type: "string", Description: "Task id (for add/update/done)"},
+				"action":  {Type: "string", Description: "One of: list, add, update, done, clear"},
+				"id":      {Type: "string", Description: "Task id (for add/update/done)"},
 				"content": {Type: "string", Description: "Task description (for add/update)"},
 				"status":  {Type: "string", Description: "pending|in_progress|completed|cancelled (for add/update)"},
 			},
