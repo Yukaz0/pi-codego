@@ -94,7 +94,23 @@
 
 ## Instalasi
 
-### Prasyarat
+### Linux / macOS (one-liner, tanpa Go)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Yukaz0/pi-codego/main/scripts/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/Yukaz0/pi-codego/main/scripts/install.ps1 | iex
+```
+
+Installer mengunduh binary terbaru dari GitHub Releases ke `~/.local/bin/pi-go` (Linux/macOS) atau `%LOCALAPPDATA%\Programs\pi-go\pi-go.exe` (Windows).
+
+Atau download manual di: https://github.com/Yukaz0/pi-codego/releases/latest
+
+### Prasyarat (build dari source)
 
 - Go **1.26+** (`go version`)
 - API key salah satu provider (atau Ollama lokal tanpa key)
@@ -102,8 +118,8 @@
 ### Build dari Source
 
 ```bash
-git clone https://github.com/your-org/pi-code-golang
-cd pi-code-golang
+git clone https://github.com/Yukaz0/pi-codego
+cd pi-codego
 
 # binary optimized (~21 MB)
 go build -ldflags="-s -w" -o bin/pi ./cmd/pi
