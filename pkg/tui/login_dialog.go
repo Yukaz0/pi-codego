@@ -27,11 +27,65 @@ func (m *Model) openProviderPicker(filter string) {
 			}
 		}
 	}
-	items := m.filterItems(providers, filter)
+	// explicit entry to add a brand-new custom provider from inside /login
+	const customItem = "[custom] Add a new provider (URL + API key)..."
+	items := m.filterItems(append(providers, customItem), filter)
 	m.openPicker("Select provider", items, func(sel string) tea.Cmd {
-		m.promptForKey(sel)
+		if sel == customItem {
+			m.promptForCustom()
+		} else {
+			m.promptForKey(sel)
+		}
 		return nil
 	}, false)
+}
+
+// promptForCustom adds a brand-new custom provider entirely from inside
+// /login: name -> base URL -> API key -> save + activate.
+func (m *Model) promptForCustom() {
+	var (
+		provName string
+		baseURL  string
+		step     int
+	)
+	nameLabel := "Enter provider name (e.g. myhost)"
+	m.picker = pickerState{
+		active:      true,
+		title:       "Login: custom provider",
+		prompt:      true,
+		promptLabel: nameLabel,
+		queryEmpty:  true,
+		onPrompt: func(val string) (string, bool) {
+			val = strings.TrimSpace(val)
+			switch step {
+			case 0:
+				if val == "" {
+					m.appendSystem(errorStyle.Render("Provider name is required"))
+					return nameLabel, false
+				}
+				provName = val
+				step = 1
+				label := "Enter base URL for " + provName + " (e.g. https://api.myhost.com/v1)"
+				m.picker.promptLabel = label
+				return label, false
+			case 1:
+				if !strings.HasPrefix(val, "http://") && !strings.HasPrefix(val, "https://") {
+					m.appendSystem(errorStyle.Render("URL must start with http:// or https://"))
+					return m.picker.promptLabel, false
+				}
+				baseURL = val
+				step = 2
+				m.picker.maskInput = true
+				label := "Enter API key for " + provName + " (empty if not required)"
+				m.picker.promptLabel = label
+				return label, false
+			default:
+				m.picker.maskInput = false
+				m.finishLogin(provName, val, baseURL)
+				return "", true
+			}
+		},
+	}
 }
 
 // promptForKey starts the Pi-style inline prompt flow for a provider:
