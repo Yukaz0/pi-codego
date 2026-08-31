@@ -216,8 +216,9 @@ func handleChangelog(m *Model, _ string) tea.Cmd {
 
 func handleModel(m *Model, args string) tea.Cmd {
 	if strings.TrimSpace(args) == "" {
-		// interactive picker — arrow ↑/↓ + Enter per request, plain selectable list
-		m.openModelPicker("")
+		// Pi-style two-step: pick a registered provider first, then only
+		// that provider's models are listed.
+		m.openModelProviderPicker()
 		return nil
 	}
 	// handle --default flag
@@ -226,6 +227,20 @@ func handleModel(m *Model, args string) tea.Cmd {
 	if strings.HasSuffix(argsTrim, "--default") || strings.HasSuffix(argsTrim, "--save") {
 		makeDefault = true
 		argsTrim = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(argsTrim, "--default"), "--save"))
+	}
+	// /model <provider> (no slash in arg, matches a catalog provider) ->
+	// scoped model list for that provider only.
+	if !strings.Contains(argsTrim, "/") && !strings.Contains(argsTrim, " ") {
+		provs := map[string]bool{}
+		for _, full := range m.availableModels() {
+			if i := strings.Index(full, "/"); i > 0 {
+				provs[strings.ToLower(full[:i])] = true
+			}
+		}
+		if provs[strings.ToLower(argsTrim)] {
+			m.openModelPickerScoped(argsTrim, "")
+			return nil
+		}
 	}
 	modelArg := strings.ReplaceAll(argsTrim, " ", "/")
 	pvd, modelName, err := provider.ResolveProvider(provider.Config{Model: modelArg})

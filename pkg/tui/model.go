@@ -602,6 +602,10 @@ func (m *Model) appendUser(text string) {
 	m.viewport.GotoBottom()
 }
 
+// AppendStartupNotice records a startup-time notice (e.g. self-update
+// result) into the chat log. Called from main before the program runs.
+func (m *Model) AppendStartupNotice(text string) { m.appendSystem(text) }
+
 func (m *Model) appendSystem(text string) {
 	m.viewport.SetContent(m.viewport.View() + "\n" + statusStyle.Render(text))
 	m.viewport.GotoBottom()
@@ -889,13 +893,33 @@ func (m *Model) filterItems(items []string, filter string) []string {
 }
 
 func (m *Model) openModelPicker(filter string) {
-	items := m.filterItems(m.availableModels(), filter)
+	m.openModelPickerScoped("", filter)
+}
+
+// openModelPickerScoped opens the model list restricted to one provider
+// (empty provider = all). filter is a substring narrowing within that scope.
+func (m *Model) openModelPickerScoped(provider, filter string) {
+	all := m.availableModels()
+	var items []string
+	for _, full := range all {
+		if provider != "" {
+			i := strings.Index(full, "/")
+			if i <= 0 || !strings.EqualFold(full[:i], provider) {
+				continue
+			}
+		}
+		items = append(items, full)
+	}
+	items = m.filterItems(items, filter)
 	if len(items) == 0 {
 		items = []string{"openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet", "gemini/gemini-1.5-flash", "ollama/llama3"}
 	}
-	cur := m.engine.Config.Model
-	if m.engine.Config.Provider != nil && !strings.Contains(cur, "/") {
-		cur = m.engine.Config.Provider.Name() + "/" + cur
+	cur := ""
+	if m.engine != nil {
+		cur = m.engine.Config.Model
+		if m.engine.Config.Provider != nil && !strings.Contains(cur, "/") {
+			cur = m.engine.Config.Provider.Name() + "/" + cur
+		}
 	}
 	cursor := 0
 	for i, it := range items {
@@ -904,12 +928,42 @@ func (m *Model) openModelPicker(filter string) {
 			break
 		}
 	}
-	m.openPicker("Select model — "+cur, items, func(sel string) tea.Cmd {
+	title := "Select model — " + cur
+	if provider != "" {
+		title = "Select model (" + provider + ") — " + cur
+	}
+	m.openPicker(title, items, func(sel string) tea.Cmd {
 		sel = strings.ReplaceAll(sel, " ", "/")
 		m.applyModelSelection(sel)
 		return nil
 	}, true)
 	m.picker.cursor = cursor
+}
+
+// openModelProviderPicker lists only providers that actually have models in
+// the catalog (Pi-style two-step: provider first, then model).
+func (m *Model) openModelProviderPicker() {
+	counts := map[string]int{}
+	for _, full := range m.availableModels() {
+		if i := strings.Index(full, "/"); i > 0 {
+			counts[full[:i]]++
+		}
+	}
+	provs := make([]string, 0, len(counts))
+	for p := range counts {
+		provs = append(provs, p)
+	}
+	sort.Strings(provs)
+	const allItem = "All providers"
+	items := append([]string{allItem}, provs...)
+	m.openPicker("Select provider", items, func(sel string) tea.Cmd {
+		if sel == allItem {
+			m.openModelPickerScoped("", "")
+		} else {
+			m.openModelPickerScoped(sel, "")
+		}
+		return nil
+	}, false)
 }
 
 func (m *Model) confirmPicker() tea.Cmd {

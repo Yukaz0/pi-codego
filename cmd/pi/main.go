@@ -28,6 +28,25 @@ var globalMCPManager *mcp.Manager
 // It is used by the self-updater and reported by `pi-go --version`.
 var version = "dev"
 
+// pendingUpdateNotice is set when a self-update replaced the on-disk binary
+// during this launch; the TUI surfaces it in the chat log at startup.
+var pendingUpdateNotice string
+
+// isVersionOrHelpInvocation reports whether the user just asked for
+// --version/-v/--help/-h, in which case we skip the network update check.
+func isVersionOrHelpInvocation(cmd *cobra.Command, args []string) bool {
+	if cmd.CalledAs() == "version" {
+		return true
+	}
+	for _, a := range args {
+		switch a {
+		case "--version", "-v", "--help", "-h":
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	flagModel    string
 	flagProvider string
@@ -68,9 +87,12 @@ func main() {
 
 func runRoot(cmd *cobra.Command, args []string) error {
 	// Self-update: silently check GitHub Releases and replace the on-disk
-	// binary if a newer version exists (respects PI_NO_UPDATE + 1h cooldown).
-	if newVersion := update.CheckAndUpdate(version); newVersion != "" {
-		fmt.Fprintf(os.Stderr, "pi-go: updated to %s (restart to use new version)\n", newVersion)
+	// binary if a newer version exists (respects PI_NO_UPDATE + cooldown).
+	// Skipped for --version/--help so those stay pure and fast.
+	if !isVersionOrHelpInvocation(cmd, args) {
+		if newVersion := update.CheckAndUpdate(version); newVersion != "" {
+			pendingUpdateNotice = fmt.Sprintf("pi-go: updated to %s — this session still runs %s; restart pi-go to use the new version", newVersion, version)
+		}
 	}
 	// Resolve print query: -p flag may be in args if passed as -p "query" without =
 	// Cobra already handles --print string, but positional fallback:
@@ -233,6 +255,9 @@ func runInteractiveMode() error {
 	}()
 
 	m := tui.NewModel(eng)
+	if pendingUpdateNotice != "" {
+		m.AppendStartupNotice(pendingUpdateNotice)
+	}
 	if flagSession != "" {
 		if err := m.LoadSessionByID(flagSession); err != nil {
 			return fmt.Errorf("failed to resume session %q: %w", flagSession, err)

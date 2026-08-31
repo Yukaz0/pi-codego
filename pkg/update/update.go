@@ -62,7 +62,7 @@ func shouldCheck() bool {
 	if err != nil {
 		return true
 	}
-	return time.Since(time.Unix(t, 0)) > time.Hour
+	return time.Since(time.Unix(t, 0)) > 15*time.Minute
 }
 
 // markChecked records that a check happened now.
