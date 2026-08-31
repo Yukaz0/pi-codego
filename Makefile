@@ -3,7 +3,8 @@
 BINARY := bin/pi
 BINARY_GO := bin/pi-go
 PKG := ./...
-LDFLAGS := -s -w
+VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 INSTALL_NAME ?= pi-go
@@ -11,9 +12,9 @@ INSTALL_NAME ?= pi-go
 help: ## Tampilkan bantuan
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build dev binary ke bin/pi
+build: ## Build dev binary ke bin/pi (stamp version via -ldflags)
 	@mkdir -p bin
-	go build -o $(BINARY) ./cmd/pi
+	go build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/pi
 	@ls -lh $(BINARY)
 
 build-release: ## Build optimized (~21MB) dengan -ldflags="-s -w"

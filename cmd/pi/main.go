@@ -19,9 +19,14 @@ import (
 	"pi/pkg/tools"
 	"pi/pkg/tui"
 	"pi/pkg/types"
+	"pi/pkg/update"
 )
 
 var globalMCPManager *mcp.Manager
+
+// version is stamped at build time via -ldflags "-X main.version=vX.Y.Z".
+// It is used by the self-updater and reported by `pi-go --version`.
+var version = "dev"
 
 var (
 	flagModel    string
@@ -37,10 +42,11 @@ var (
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "pi",
-		Short: "Pi Coding Agent - lightweight native Go coding assistant",
-		Long:  `Pi is a lightweight, high-performance coding agent with multi-provider LLM support, tool execution, TUI, print and RPC modes.`,
-		RunE:  runRoot,
+		Use:     "pi",
+		Short:   "Pi Coding Agent - lightweight native Go coding assistant",
+		Long:    `Pi is a lightweight, high-performance coding agent with multi-provider LLM support, tool execution, TUI, print and RPC modes.`,
+		Version: version,
+		RunE:    runRoot,
 	}
 
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "Model to use (e.g. openai/gpt-4o, anthropic/claude-3-5-sonnet, ollama/llama3, gemini/gemini-1.5-flash)")
@@ -61,6 +67,11 @@ func main() {
 }
 
 func runRoot(cmd *cobra.Command, args []string) error {
+	// Self-update: silently check GitHub Releases and replace the on-disk
+	// binary if a newer version exists (respects PI_NO_UPDATE + 1h cooldown).
+	if newVersion := update.CheckAndUpdate(version); newVersion != "" {
+		fmt.Fprintf(os.Stderr, "pi-go: updated to %s (restart to use new version)\n", newVersion)
+	}
 	// Resolve print query: -p flag may be in args if passed as -p "query" without =
 	// Cobra already handles --print string, but positional fallback:
 	printQuery := flagPrint

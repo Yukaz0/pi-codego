@@ -612,6 +612,7 @@ go vet ./...
 - [x] Image paste via clipboard (`Ctrl+V`: wl-paste / xclip / path file gambar)
 - [x] Keybindings custom via `settings.json` → `"keybindings": { action: key }`
 - [x] CI workflow (gofmt/vet/test/build per push & PR)
+- [x] Self-update: `pi-go` cek GitHub Releases saat dijalankan, otomatis ganti binary bila ada rilis lebih baru (nonaktif via `PI_NO_UPDATE=1`, cooldown 1 jam)
 
 ---
 
