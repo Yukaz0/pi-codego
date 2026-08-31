@@ -197,6 +197,9 @@ func ResolveProvider(cfg Config) (types.Provider, string, error) {
 					}
 				}
 			}
+			if apiKey == "" {
+				apiKey = os.Getenv("OPENROUTER_API_KEY")
+			}
 			// Paksa rute OpenRouter kecuali user set --base-url eksplisit.
 			if cfg.BaseURL == "" {
 				baseURL = "https://openrouter.ai/api/v1"
