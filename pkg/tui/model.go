@@ -91,6 +91,8 @@ type pickerState struct {
 	promptValue string
 	maskInput   bool
 	onPrompt    func(string) (nextLabel string, finished bool)
+	pendingCmd  tea.Cmd // returned to the runtime when the prompt finishes
+	scope       string  // provider scope when the picker lists models
 }
 
 func NewModel(engine *agent.Engine) *Model {
@@ -189,12 +191,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					val := m.picker.promptValue
 					m.picker.promptValue = ""
 					next, finished := m.picker.onPrompt(val)
+					var cmd tea.Cmd
 					if finished {
+						cmd = m.picker.pendingCmd
+						m.picker.pendingCmd = nil
 						m.picker.active = false
 					} else {
 						m.picker.promptLabel = next
 					}
-					return m, nil
+					return m, cmd
 				case "backspace":
 					if len(m.picker.promptValue) > 0 {
 						r := []rune(m.picker.promptValue)
@@ -439,6 +444,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 
+	case providerModelsFetchedMsg:
+		if msg.Err != nil {
+			m.appendSystem(errorStyle.Render(fmt.Sprintf("Models for %s: %v", msg.Provider, msg.Err)))
+		} else if len(msg.Models) > 0 {
+			m.appendSystem(fmt.Sprintf("✓ %s: %d model(s) discovered and cached for /model", msg.Provider, len(msg.Models)))
+		}
+		// Refresh an open scoped model picker so results appear immediately.
+		if m.picker.active && !m.picker.prompt && m.picker.scope != "" &&
+			strings.EqualFold(m.picker.scope, msg.Provider) && msg.Err == nil && len(msg.Models) > 0 {
+			m.openModelPickerScoped(m.picker.scope, "")
+		}
+		return m, nil
 	case statusMsg:
 		m.appendSystem(string(msg))
 		return m, nil
@@ -912,7 +929,11 @@ func (m *Model) openModelPickerScoped(provider, filter string) {
 	}
 	items = m.filterItems(items, filter)
 	if len(items) == 0 {
-		items = []string{"openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet", "gemini/gemini-1.5-flash", "ollama/llama3"}
+		if provider != "" {
+			items = []string{"(querying " + provider + "…)"}
+		} else {
+			items = []string{"openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet", "gemini/gemini-1.5-flash", "ollama/llama3"}
+		}
 	}
 	cur := ""
 	if m.engine != nil {
@@ -933,36 +954,55 @@ func (m *Model) openModelPickerScoped(provider, filter string) {
 		title = "Select model (" + provider + ") — " + cur
 	}
 	m.openPicker(title, items, func(sel string) tea.Cmd {
+		if strings.HasPrefix(sel, "(querying") {
+			return nil
+		}
 		sel = strings.ReplaceAll(sel, " ", "/")
 		m.applyModelSelection(sel)
 		return nil
 	}, true)
+	m.picker.scope = strings.ToLower(provider)
 	m.picker.cursor = cursor
 }
 
-// openModelProviderPicker lists only providers that actually have models in
-// the catalog (Pi-style two-step: provider first, then model).
+// openModelProviderPicker lists providers the user actually has: everything
+// with credentials in auth.json plus everything present in the model catalog
+// (models-store.json / cache / favorites). Selecting a provider opens only
+// its models; providers with no cached models trigger a live /models fetch.
 func (m *Model) openModelProviderPicker() {
-	counts := map[string]int{}
+	provs := map[string]bool{}
 	for _, full := range m.availableModels() {
 		if i := strings.Index(full, "/"); i > 0 {
-			counts[full[:i]]++
+			provs[strings.ToLower(full[:i])] = true
 		}
 	}
-	provs := make([]string, 0, len(counts))
-	for p := range counts {
-		provs = append(provs, p)
+	if saved, err := loadPiAuthMap(); err == nil {
+		for p := range saved {
+			provs[strings.ToLower(p)] = true
+		}
 	}
-	sort.Strings(provs)
+	list := make([]string, 0, len(provs))
+	for p := range provs {
+		list = append(list, p)
+	}
+	sort.Strings(list)
 	const allItem = "All providers"
-	items := append([]string{allItem}, provs...)
+	items := append([]string{allItem}, list...)
 	m.openPicker("Select provider", items, func(sel string) tea.Cmd {
 		if sel == allItem {
 			m.openModelPickerScoped("", "")
-		} else {
-			m.openModelPickerScoped(sel, "")
+			return nil
 		}
-		return nil
+		m.openModelPickerScoped(sel, "")
+		// If the provider has no models in the catalog yet, fetch them from
+		// its endpoint; the picker refreshes when the results arrive.
+		for _, full := range m.availableModels() {
+			if i := strings.Index(full, "/"); i > 0 && strings.EqualFold(full[:i], sel) {
+				return nil
+			}
+		}
+		m.appendSystem("No cached models for " + sel + " — querying endpoint…")
+		return fetchProviderModelsCmd(sel)
 	}, false)
 }
 
@@ -1032,6 +1072,16 @@ func (m *Model) availableModels() []string {
 		if !seen[strings.ToLower(f)] {
 			out = append(out, f)
 			seen[strings.ToLower(f)] = true
+		}
+	}
+	// models discovered via /models endpoint (custom providers, /login fetch)
+	for prov, mods := range loadModelsCache() {
+		for _, mod := range mods {
+			full := prov + "/" + mod
+			if !seen[strings.ToLower(full)] {
+				out = append(out, full)
+				seen[strings.ToLower(full)] = true
+			}
 		}
 	}
 	if dir := piAgentDirTUI(); dir != "" {

@@ -133,6 +133,11 @@ func (m *Model) finishLogin(provName, key, baseURL string) {
 		msg += " (endpoint: " + baseURL + ")"
 	}
 	m.appendSystem(msg)
+	// Discover this provider's models in the background (GET {baseUrl}/models)
+	// so they show up in /model even for custom providers missing from
+	// models-store.json. Queued via picker.pendingCmd right after the prompt
+	// that called finishLogin closes.
+	m.picker.pendingCmd = fetchProviderModelsCmd(provName)
 	if m.engine == nil {
 		return
 	}
