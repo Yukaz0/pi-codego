@@ -84,7 +84,7 @@ func init() {
 		"hotkeys":       {Name: "hotkeys", Description: "Show keyboard shortcuts", Usage: "/hotkeys", Handler: handleHotkeys},
 		"changelog":     {Name: "changelog", Description: "Show version history", Usage: "/changelog", Handler: handleChangelog},
 		"model":         {Name: "model", Description: "Switch models: /model [provider/model] or /model", Usage: "/model [provider/model]", Handler: handleModel},
-		"login":         {Name: "login", Description: "Save provider credentials / custom endpoint: /login [provider] [key] [--url <endpoint>] [--model <id>]", Usage: "/login [provider] [api-key] [--url https://host/v1] [--model <id>]", Handler: handleLogin},
+		"login":         {Name: "login", Description: "Configure provider authentication", Usage: "/login [provider] [api-key] [--url <endpoint>] [--model <id>]", Handler: handleLogin},
 		"logout":        {Name: "logout", Description: "Remove provider credentials: /logout [provider]", Usage: "/logout [provider]", Handler: handleLogout},
 		"new":           {Name: "new", Description: "Start a new session", Usage: "/new", Handler: handleNew},
 		"clear":         {Name: "clear", Description: "Clear current session (alias /new)", Usage: "/clear", Handler: handleNew},
@@ -298,23 +298,23 @@ func handleLogin(m *Model, args string) tea.Cmd {
 		return nil
 	}
 	known := map[string]bool{"openai": true, "anthropic": true, "gemini": true, "ollama": true, "openrouter": true, "groq": true, "deepseek": true, "opencode-go": true}
+	// Pi-style: bare /login opens the provider selector, then prompts inline
+	// for the API key and (optionally) a custom base URL.
 	if providerName == "" {
-		// picker provider — arrow+Enter
 		m.openProviderPicker("")
 		return nil
 	}
-	if !known[providerName] && baseURL == "" {
-		// provider tidak dikenal: boleh, tapi wajib --url. Tampilkan petunjuk.
-		m.appendSystem(helpStyle.Render(fmt.Sprintf(
-			"Provider '%s' is not built-in. Use a custom endpoint:\n"+
-				"  /login %s <api-key> --url https://my-server.example.com/v1 [--model some-model]\n"+
-				"Or pick a built-in: %s",
-			providerName, providerName, "openai, anthropic, gemini, ollama, openrouter, groq, deepseek, opencode-go")))
-		m.openProviderPicker(providerName)
+	// /login <provider> — jump straight into the key/URL prompt for it.
+	if apiKey == "" && baseURL == "" && model == "" {
+		m.promptForKey(providerName)
 		return nil
 	}
-	if apiKey == "" && baseURL == "" {
-		m.openProviderPicker(providerName)
+	// Explicit form (custom provider shortcut): /login <provider> <key> [--url ...] [--model ...]
+	if !known[providerName] && baseURL == "" {
+		m.appendSystem(helpStyle.Render(fmt.Sprintf(
+			"Provider '%s' is not built-in — a custom endpoint is required:\\n"+
+				"  /login %s <api-key> --url https://my-server.example.com/v1 [--model some-model]",
+			providerName, providerName)))
 		return nil
 	}
 	if apiKey == "" && baseURL != "" && !strings.Contains(baseURL, "localhost") && !strings.Contains(baseURL, "127.0.0.1") {
@@ -347,19 +347,26 @@ func handleLogin(m *Model, args string) tea.Cmd {
 func handleLogout(m *Model, args string) tea.Cmd {
 	providerName := strings.TrimSpace(args)
 	if providerName == "" {
-		// picker provider untuk logout — arrow+Enter
-		m.openProviderPicker("")
-		// override onConfirm ke logout
-		orig := m.picker.onConfirm
-		_ = orig
-		m.picker.onConfirm = func(sel string) tea.Cmd {
+		// Pi-style: /logout only lists providers with stored credentials.
+		var items []string
+		if saved, err := loadPiAuthMap(); err == nil {
+			for p := range saved {
+				items = append(items, p)
+			}
+		}
+		if len(items) == 0 {
+			m.appendSystem("No stored credentials to remove. /logout only removes credentials saved by /login; environment variables are unchanged.")
+			return nil
+		}
+		sort.Strings(items)
+		m.openPicker("Remove credentials for", items, func(sel string) tea.Cmd {
 			if err := removePiAuth(sel); err != nil {
 				m.appendSystem(errorStyle.Render(fmt.Sprintf("Failed to remove: %v", err)))
 			} else {
-				m.appendSystem(fmt.Sprintf("✓ Removed key for %s", sel))
+				m.appendSystem("✓ Removed stored credentials for " + sel + ". Environment variables are unchanged.")
 			}
 			return nil
-		}
+		}, false)
 		return nil
 	}
 	providerName = strings.ToLower(providerName)

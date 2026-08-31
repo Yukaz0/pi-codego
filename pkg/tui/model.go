@@ -84,6 +84,13 @@ type pickerState struct {
 	searchable bool
 	query      textinput.Model
 	queryEmpty bool // true until user types anything; controls Esc behavior
+	// prompt mode (Pi-style login dialog): after selecting an item the
+	// picker stays open and asks for a typed value (API key, URL, ...).
+	prompt      bool
+	promptLabel string
+	promptValue string
+	maskInput   bool
+	onPrompt    func(string) (nextLabel string, finished bool)
 }
 
 func NewModel(engine *agent.Engine) *Model {
@@ -170,6 +177,37 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// picker takes priority
 		if m.picker.active {
+			// Prompt mode: the picker asks for a typed value (API key, URL).
+			// All printable input goes to the prompt, not the chat textarea.
+			if m.picker.prompt {
+				switch msg.String() {
+				case "esc", "ctrl+c", "ctrl+q":
+					m.picker.active = false
+					m.appendSystem("Login cancelled")
+					return m, nil
+				case "enter":
+					val := m.picker.promptValue
+					m.picker.promptValue = ""
+					next, finished := m.picker.onPrompt(val)
+					if finished {
+						m.picker.active = false
+					} else {
+						m.picker.promptLabel = next
+					}
+					return m, nil
+				case "backspace":
+					if len(m.picker.promptValue) > 0 {
+						r := []rune(m.picker.promptValue)
+						m.picker.promptValue = string(r[:len(r)-1])
+					}
+					return m, nil
+				}
+				if len(msg.Runes) > 0 {
+					m.picker.promptValue += string(msg.Runes)
+					return m, nil
+				}
+				return m, nil
+			}
 			// Route printable / backspace keys to the search input when searchable.
 			// Esc clears the query first if non-empty, otherwise closes the picker.
 			if m.picker.searchable {
@@ -482,11 +520,21 @@ func (m Model) View() string {
 	}
 	mainView := vp.View()
 	if m.picker.active {
-		var qView string
-		if m.picker.searchable {
-			qView = m.picker.query.View()
+		if m.picker.prompt {
+			shown := m.picker.promptValue
+			if m.picker.maskInput {
+				shown = strings.Repeat("*", len([]rune(shown)))
+			}
+			lines := []string{m.picker.title, "", m.picker.promptLabel, "> " + shown,
+				"", "Enter submit · Esc cancel"}
+			mainView = pickerBoxStyle.Width(min(m.width-6, 64)).Render(strings.Join(lines, "\n"))
+		} else {
+			var qView string
+			if m.picker.searchable {
+				qView = m.picker.query.View()
+			}
+			mainView = renderPicker(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView)
 		}
-		mainView = renderPicker(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView)
 	}
 
 	// status line
@@ -883,16 +931,6 @@ func (m *Model) confirmPicker() tea.Cmd {
 
 func (m *Model) applyModelSelection(modelArg string) {
 	handleModel(m, modelArg)
-}
-
-func (m *Model) openProviderPicker(filter string) {
-	providers := []string{"openai", "anthropic", "gemini", "ollama", "openrouter", "groq", "deepseek", "opencode-go"}
-	items := m.filterItems(providers, filter)
-	m.openPicker("Select provider", items, func(sel string) tea.Cmd {
-		m.textarea.SetValue("/login " + sel + " ")
-		m.appendSystem("Provider " + sel + " selected — type API key then Enter (or /login " + sel + " <key>)")
-		return nil
-	}, false)
 }
 
 func (m *Model) openCommandPicker(filter string) {
