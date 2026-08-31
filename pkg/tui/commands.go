@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"pi/pkg/provider"
+	"pi/pkg/provider/modelcatalog"
 	"pi/pkg/session"
 )
 
@@ -251,6 +252,14 @@ func handleModel(m *Model, args string) tea.Cmd {
 	}
 	m.engine.Config.Provider = pvd
 	m.engine.Config.Model = modelName
+	// keep the compaction budget in sync with the new model's context window
+	if c := m.engine.Config.Compactor; c != nil {
+		if info, ok := modelcatalog.Lookup(pvd.Name(), modelName); ok && info.ContextWindow > 0 {
+			c.MaxTokens = info.ContextWindow * 3 / 4
+		} else {
+			c.MaxTokens = 0 // unknown model: message-count heuristic only
+		}
+	}
 	msg := fmt.Sprintf("✓ Switched to %s (%s) — %s", modelName, pvd.Name(), modelArg)
 	if makeDefault {
 		if err := saveDefaultModel(pvd.Name(), modelName); err == nil {

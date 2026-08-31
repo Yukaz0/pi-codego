@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"pi/pkg/agent"
+	"pi/pkg/provider/modelcatalog"
 	"pi/pkg/session"
 	"pi/pkg/types"
 )
@@ -91,8 +92,9 @@ type pickerState struct {
 	promptValue string
 	maskInput   bool
 	onPrompt    func(string) (nextLabel string, finished bool)
-	pendingCmd  tea.Cmd // returned to the runtime when the prompt finishes
-	scope       string  // provider scope when the picker lists models
+	pendingCmd  tea.Cmd           // returned to the runtime when the prompt finishes
+	scope       string            // provider scope when the picker lists models
+	annotations map[string]string // optional right-hand note per item
 }
 
 func NewModel(engine *agent.Engine) *Model {
@@ -550,7 +552,7 @@ func (m Model) View() string {
 			if m.picker.searchable {
 				qView = m.picker.query.View()
 			}
-			mainView = renderPicker(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView)
+			mainView = renderPickerAnnotated(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView, m.picker.annotations)
 		}
 	}
 
@@ -963,6 +965,13 @@ func (m *Model) openModelPickerScoped(provider, filter string) {
 	}, true)
 	m.picker.scope = strings.ToLower(provider)
 	m.picker.cursor = cursor
+	notes := map[string]string{}
+	for _, it := range items {
+		if info, ok := modelcatalog.LookupFull(it); ok {
+			notes[it] = modelcatalog.FormatSuffix(info, true)
+		}
+	}
+	m.picker.annotations = notes
 }
 
 // openModelProviderPicker lists providers the user actually has: everything
@@ -1106,6 +1115,30 @@ func (m *Model) availableModels() []string {
 					}
 				}
 			}
+		}
+	}
+	// Embedded curated catalog (models.dev snapshot): adds real models +
+	// metadata for providers the user has credentials for but which are
+	// missing from models-store.json (e.g. anthropic, openai, xai). On a
+	// fresh install with nothing else, the whole catalog is listed so the
+	// picker is never empty.
+	haveProv := map[string]bool{}
+	if saved, err := loadPiAuthMap(); err == nil {
+		for pr := range saved {
+			haveProv[strings.ToLower(pr)] = true
+		}
+	}
+	for _, full := range modelcatalog.CatalogModels() {
+		pr := full
+		if i := strings.Index(full, "/"); i > 0 {
+			pr = full[:i]
+		}
+		if len(out) > 0 && !haveProv[pr] {
+			continue
+		}
+		if !seen[full] {
+			out = append(out, full)
+			seen[full] = true
 		}
 	}
 	if len(out) == 0 {

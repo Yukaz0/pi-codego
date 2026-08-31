@@ -14,6 +14,7 @@ import (
 	piContext "pi/pkg/context"
 	"pi/pkg/mcp"
 	"pi/pkg/provider"
+	"pi/pkg/provider/modelcatalog"
 	"pi/pkg/rpc"
 	"pi/pkg/session"
 	"pi/pkg/tools"
@@ -171,6 +172,12 @@ func buildEngine() (*agent.Engine, error) {
 	sess := session.NewTree()
 	storage := session.NewStorage("")
 	compactor := session.NewCompactor(40, pvd, modelName)
+	// Token budget from the model catalog: compact once the history passes
+	// ~75% of the model's context window (chars/4 estimate). Falls back to
+	// message-count-only for unknown/custom models.
+	if info, ok := modelcatalog.Lookup(pvd.Name(), modelName); ok && info.ContextWindow > 0 {
+		compactor.MaxTokens = info.ContextWindow * 3 / 4
+	}
 
 	workspace, _ := os.Getwd()
 	instrLoader := piContext.NewInstructionLoader(workspace)

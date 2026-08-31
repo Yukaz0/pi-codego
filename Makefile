@@ -95,3 +95,8 @@ check: vet test ## vet + build (CI)
 size: build-release ## Tampilkan ukuran binary
 	@ls -lh $(BINARY)
 	@wc -c $(BINARY)
+
+# Refresh the embedded model catalog from models.dev
+catalog:
+	go run scripts/generate_model_catalog.go -fetch
+	gofmt -w pkg/provider/modelcatalog

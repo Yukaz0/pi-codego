@@ -143,6 +143,9 @@ var (
 				Foreground(lipgloss.Color("#d4d4d4")).
 				Padding(0, 1)
 
+	pickerNoteStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			PaddingLeft(2)
 	pickerHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#8abeb7"))
@@ -355,6 +358,12 @@ func copyToClipboard(text string) error {
 }
 
 func renderPicker(title string, items []string, cursor int, width int, queryView string) string {
+	return renderPickerAnnotated(title, items, cursor, width, queryView, nil)
+}
+
+// renderPickerAnnotated is renderPicker with optional right-hand notes per
+// item (e.g. model catalog metadata: ctx window, cost).
+func renderPickerAnnotated(title string, items []string, cursor int, width int, queryView string, annotations map[string]string) string {
 	if len(items) == 0 {
 		return pickerBoxStyle.Render(pickerHeaderStyle.Render("No items"))
 	}
@@ -387,18 +396,22 @@ func renderPicker(title string, items []string, cursor int, width int, queryView
 	}
 	for i := start; i < end; i++ {
 		prefix := "  "
+		note := ""
+		if annotations != nil {
+			note = annotations[items[i]]
+		}
 		if i == cursor {
 			prefix = "▸ "
-			sb.WriteString(prefix + pickerSelectedStyle.Render(items[i]) + "\n")
+			sb.WriteString(prefix + pickerSelectedStyle.Render(items[i]) + pickerNoteStyle.Render(note) + "\n")
 		} else {
-			sb.WriteString(prefix + pickerNormalStyle.Render(items[i]) + "\n")
+			sb.WriteString(prefix + pickerNormalStyle.Render(items[i]) + pickerNoteStyle.Render(note) + "\n")
 		}
 	}
 	if end < len(items) {
 		sb.WriteString(helpStyle.Render(fmt.Sprintf("  … %d more below", len(items)-end)) + "\n")
 	}
 	sb.WriteString("\n" + helpStyle.Render(fmt.Sprintf("%d/%d", cursor+1, len(items))))
-	box := pickerBoxStyle.Width(min(width-6, 64)).Render(sb.String())
+	box := pickerBoxStyle.Width(min(width-6, 96)).Render(sb.String())
 	return box
 }
 
