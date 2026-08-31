@@ -609,6 +609,9 @@ go vet ./...
 - [x] Slash command suggestions (live autocomplete saat mengetik `/`)
 - [x] `/login` custom endpoint (`--url`) + custom model (`--model`), provider apa pun via OpenAI-compatible
 - [x] Session fork/clone/name/export, editor `@file`, bash mode `!cmd`/`!!cmd`
+- [x] Image paste via clipboard (`Ctrl+V`: wl-paste / xclip / path file gambar)
+- [x] Keybindings custom via `settings.json` → `"keybindings": { action: key }`
+- [x] CI workflow (gofmt/vet/test/build per push & PR)
 
 ---
 

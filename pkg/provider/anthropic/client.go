@@ -43,6 +43,7 @@ type anthropicContentBlock struct {
 	Input     map[string]any `json:"input,omitempty"`
 	Content   string         `json:"content,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Source    map[string]any `json:"source,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -73,12 +74,24 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case types.RoleUser:
-			messages = append(messages, anthropicMessage{
-				Role: "user",
-				Content: []anthropicContentBlock{
-					{Type: "text", Text: msg.Content},
-				},
-			})
+			blocks := []anthropicContentBlock{}
+			if msg.Content != "" {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: msg.Content})
+			}
+			for _, img := range msg.Images {
+				blocks = append(blocks, anthropicContentBlock{
+					Type: "image",
+					Source: map[string]any{
+						"type":       "base64",
+						"media_type": img.MediaType,
+						"data":       img.Data,
+					},
+				})
+			}
+			if len(blocks) == 0 {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: ""})
+			}
+			messages = append(messages, anthropicMessage{Role: "user", Content: blocks})
 		case types.RoleAssistant:
 			var blocks []anthropicContentBlock
 			if msg.Content != "" {

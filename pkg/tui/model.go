@@ -58,9 +58,11 @@ type Model struct {
 	thinkingMode string // "off", "minimal", "low", "medium", "high", "xhigh", "max"
 	gitBranch    string
 	tokens       int
-	usage        *sessionUsage     // shared accumulator so listeners on Model copies report back
-	slashCursor  int               // highlighted row in the inline slash suggestion popup
-	bgTasks      map[string]string // id -> label
+	usage        *sessionUsage           // shared accumulator so listeners on Model copies report back
+	slashCursor  int                     // highlighted row in the inline slash suggestion popup
+	pendingImgs  []types.ImageAttachment // images pasted via Ctrl+V, attached on next submit
+	keyAlias     map[string]string       // custom keybindings: override key -> canonical key
+	bgTasks      map[string]string       // id -> label
 	bgCounter    int
 	sessionName  string
 
@@ -125,6 +127,7 @@ func NewModel(engine *agent.Engine) Model {
 		gitBranch:    detectGitBranch(),
 		bgTasks:      map[string]string{},
 		usage:        &sessionUsage{},
+		keyAlias:     loadKeyOverrides(),
 	}
 }
 
@@ -243,7 +246,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		switch msg.String() {
+		keyStr := msg.String()
+		if canon, ok := m.keyAlias[keyStr]; ok {
+			keyStr = canon
+		}
+		switch keyStr {
+		case "ctrl+v":
+			// paste image from clipboard (Wayland/xclip/image file path)
+			return m, readClipboardImageMsg
 		case "ctrl+c", "ctrl+q":
 			if m.streaming {
 				if m.cancel != nil {
@@ -339,14 +349,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, cmd
 					}
 					// prompt template: show original input, send expanded
-					m.appendUser(text)
+					m.appendUser(text + m.attachPendingImages())
 					m.streaming = true
 					m.streamBuffer.Reset()
 					m.errMsg = ""
 					return m, tea.Batch(m.spinner.Tick, m.runTurn(expandPrompt))
 				}
 			}
-			m.appendUser(text)
+			m.appendUser(text + m.attachPendingImages())
 			m.streaming = true
 			m.streamBuffer.Reset()
 			m.errMsg = ""
@@ -391,6 +401,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusMsg:
 		m.appendSystem(string(msg))
+		return m, nil
+
+	case pasteMsg:
+		if msg.err != nil {
+			m.appendSystem(errorStyle.Render("paste: " + msg.err.Error()))
+			return m, nil
+		}
+		m.pendingImgs = append(m.pendingImgs, *msg.img)
+		total := 0
+		for _, im := range m.pendingImgs {
+			total += len(im.Data) * 3 / 4
+		}
+		m.appendSystem(fmt.Sprintf("✓ image attached (%s, ~%d KB) — %d pending; send a message to include it",
+			msg.img.MediaType, total>>10, len(m.pendingImgs)))
 		return m, nil
 
 	case spinner.TickMsg:
@@ -507,6 +531,18 @@ func (m Model) View() string {
 		slashPopup,
 		footer,
 	)
+}
+
+// attachPendingImages moves Ctrl+V clipboard images onto the engine so the
+// next user message carries them, and returns a short label for the bubble.
+func (m *Model) attachPendingImages() string {
+	if len(m.pendingImgs) == 0 {
+		return ""
+	}
+	m.engine.PendingImages = append(m.engine.PendingImages, m.pendingImgs...)
+	n := len(m.pendingImgs)
+	m.pendingImgs = nil
+	return fmt.Sprintf(" [+%d image%s]", n, map[bool]string{true: "s", false: ""}[n > 1])
 }
 
 // appendUser adds a user message to history + viewport using Pi-style bubble (Box bg, no border)

@@ -49,6 +49,10 @@ type EngineConfig struct {
 type Engine struct {
 	Config   EngineConfig
 	Steering *SteeringController
+
+	// PendingImages are attached to the next user message once, then cleared.
+	// Used by the TUI for clipboard image paste (Ctrl+V).
+	PendingImages []types.ImageAttachment
 }
 
 func NewEngine(cfg EngineConfig) *Engine {
@@ -112,6 +116,10 @@ func (e *Engine) RunTurn(parentCtx context.Context, userPrompt string) error {
 func (e *Engine) runSingleTurn(parentCtx context.Context, userPrompt string) error {
 	// 1. Add user message to session tree
 	userMsg := types.NewUserMessage(userPrompt)
+	if len(e.PendingImages) > 0 {
+		userMsg.Images = e.PendingImages
+		e.PendingImages = nil
+	}
 	e.Config.SessionTree.AddMessage(userMsg)
 
 	systemPrompt := e.BuildSystemPrompt()

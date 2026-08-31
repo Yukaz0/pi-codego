@@ -110,10 +110,24 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 				Content: msg.Content,
 			})
 		case types.RoleUser:
-			messages = append(messages, openAIMessage{
-				Role:    "user",
-				Content: msg.Content,
-			})
+			if len(msg.Images) > 0 {
+				parts := []map[string]any{}
+				if msg.Content != "" {
+					parts = append(parts, map[string]any{"type": "text", "text": msg.Content})
+				}
+				for _, img := range msg.Images {
+					parts = append(parts, map[string]any{
+						"type":      "image_url",
+						"image_url": map[string]any{"url": "data:" + img.MediaType + ";base64," + img.Data},
+					})
+				}
+				messages = append(messages, openAIMessage{Role: "user", Content: parts})
+			} else {
+				messages = append(messages, openAIMessage{
+					Role:    "user",
+					Content: msg.Content,
+				})
+			}
 		case types.RoleAssistant:
 			var tcs []openAIToolCall
 			for _, tc := range msg.ToolCalls {

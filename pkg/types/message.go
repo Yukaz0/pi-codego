@@ -31,10 +31,16 @@ type ToolResult struct {
 	IsError    bool   `json:"is_error,omitempty"`
 }
 
+type ImageAttachment struct {
+	MediaType string `json:"media_type"` // e.g. "image/png"
+	Data      string `json:"data"`       // base64-encoded bytes
+}
+
 type Message struct {
 	ID          string            `json:"id,omitempty"`
 	Role        Role              `json:"role"`
 	Content     string            `json:"content"`
+	Images      []ImageAttachment `json:"images,omitempty"`
 	ToolCalls   []ToolCall        `json:"tool_calls,omitempty"`
 	ToolResults []ToolResult      `json:"tool_results,omitempty"`
 	CreatedAt   time.Time         `json:"created_at,omitempty"`

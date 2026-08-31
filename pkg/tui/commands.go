@@ -318,7 +318,7 @@ func handleLogin(m *Model, args string) tea.Cmd {
 		return nil
 	}
 	if apiKey == "" && baseURL != "" && !strings.Contains(baseURL, "localhost") && !strings.Contains(baseURL, "127.0.0.1") {
-		m.appendSystem(errorStyle.Render("Missing api-key. Usage: /login "+providerName+" <api-key> --url <endpoint>"))
+		m.appendSystem(errorStyle.Render("Missing api-key. Usage: /login " + providerName + " <api-key> --url <endpoint>"))
 		return nil
 	}
 	if err := savePiAuth(providerName, apiKey, baseURL); err != nil {
@@ -339,7 +339,7 @@ func handleLogin(m *Model, args string) tea.Cmd {
 		}
 		m.appendSystem(fmt.Sprintf("✓ Provider switched to %s (model: %s)", pvd.Name(), m.engine.Config.Model))
 	} else {
-		m.appendSystem(errorStyle.Render("Saved, but could not activate now: "+err.Error()))
+		m.appendSystem(errorStyle.Render("Saved, but could not activate now: " + err.Error()))
 	}
 	return nil
 }
@@ -736,6 +736,45 @@ func saveFavorites(favs []string) error {
 	}{Favorites: favs}
 	out, _ := json.MarshalIndent(obj, "", "  ")
 	return os.WriteFile(favoritesPath(), out, 0600)
+}
+
+// loadKeyOverrides reads settings.json "keybindings": {action: key}.
+// Returns alias map overrideKey -> canonicalKey used by the TUI switch.
+func loadKeyOverrides() map[string]string {
+	data, err := os.ReadFile(filepath.Join(piAgentDirTUI(), "settings.json"))
+	if err != nil {
+		return nil
+	}
+	var s struct {
+		Keybindings map[string]string `json:"keybindings"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil || len(s.Keybindings) == 0 {
+		return nil
+	}
+	canonical := map[string]string{
+		"quit":        "ctrl+c",
+		"clear":       "ctrl+l",
+		"palette":     "ctrl+p",
+		"modelPicker": "ctrl+o",
+		"thinkCycle":  "ctrl+t",
+		"copy":        "y",
+		"copyCode":    "ctrl+y",
+		"pasteImage":  "ctrl+v",
+		"toggleHelp":  "?",
+	}
+	alias := map[string]string{}
+	for action, key := range s.Keybindings {
+		c, ok := canonical[strings.TrimSpace(action)]
+		if !ok {
+			continue
+		}
+		k := strings.ToLower(strings.TrimSpace(key))
+		if k == "" {
+			continue
+		}
+		alias[k] = c
+	}
+	return alias
 }
 
 func loadDefaultModel() (string, string) {

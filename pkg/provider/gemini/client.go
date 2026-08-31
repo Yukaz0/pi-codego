@@ -39,6 +39,12 @@ type geminiPart struct {
 	Text             string              `json:"text,omitempty"`
 	FunctionCall     *geminiFunctionCall `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFuncResponse `json:"functionResponse,omitempty"`
+	InlineData       *geminiInlineData   `json:"inlineData,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFunctionCall struct {
@@ -79,12 +85,20 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case types.RoleUser:
-			contents = append(contents, geminiContent{
-				Role: "user",
-				Parts: []geminiPart{
-					{Text: msg.Content},
-				},
-			})
+			var parts []geminiPart
+			if msg.Content != "" {
+				parts = append(parts, geminiPart{Text: msg.Content})
+			}
+			for _, img := range msg.Images {
+				parts = append(parts, geminiPart{InlineData: &geminiInlineData{
+					MimeType: img.MediaType,
+					Data:     img.Data,
+				}})
+			}
+			if len(parts) == 0 {
+				parts = append(parts, geminiPart{Text: ""})
+			}
+			contents = append(contents, geminiContent{Role: "user", Parts: parts})
 		case types.RoleAssistant:
 			var parts []geminiPart
 			if msg.Content != "" {
