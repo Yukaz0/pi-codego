@@ -86,7 +86,7 @@ type pickerState struct {
 	queryEmpty bool // true until user types anything; controls Esc behavior
 }
 
-func NewModel(engine *agent.Engine) Model {
+func NewModel(engine *agent.Engine) *Model {
 	ta := textarea.New()
 	ta.Placeholder = "Ask Pi…  Enter to send  ·  / for commands  ·  ! for bash"
 	ta.Focus()
@@ -114,7 +114,7 @@ func NewModel(engine *agent.Engine) Model {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return Model{
+	return &Model{
 		engine:       engine,
 		keys:         DefaultKeyMap(),
 		viewport:     vp,
@@ -147,7 +147,7 @@ func detectGitBranch() string {
 	return strings.TrimSpace(string(out))
 }
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
 		tiCmd tea.Cmd
 		vpCmd tea.Cmd
@@ -185,7 +185,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.appendSystem(m.picker.title + " cancelled")
 					return m, nil
 				case "enter":
-					return m, m.confirmPicker()
+					cmd := m.confirmPicker()
+					return m, cmd
 				case "up", "ctrl+p":
 					if m.picker.cursor > 0 {
 						m.picker.cursor--
@@ -220,7 +221,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "enter":
-				return m, m.confirmPicker()
+				cmd := m.confirmPicker()
+				return m, cmd
 			case "esc", "ctrl+c", "ctrl+q":
 				m.picker.active = false
 				m.appendSystem(m.picker.title + " cancelled")
@@ -343,7 +345,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// slash command intercept
 			if strings.HasPrefix(text, "/") {
-				handled, cmd, expandPrompt := handleSlash(&m, text)
+				handled, cmd, expandPrompt := handleSlash(m, text)
 				if handled {
 					if expandPrompt == "" {
 						return m, cmd
@@ -871,6 +873,9 @@ func (m *Model) confirmPicker() tea.Cmd {
 	cb := m.picker.onConfirm
 	m.picker.active = false
 	if cb != nil {
+		// Panggil sinkron: closure mutate *Model milik Update saat ini.
+		// Kalau dikembalikan sebagai tea.Cmd, bubbletea mengeksekusinya
+		// ASINKRON di salinan Model yang sudah mati -> pilihan picker hilang.
 		return cb(sel)
 	}
 	return nil
