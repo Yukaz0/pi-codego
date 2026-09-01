@@ -91,12 +91,16 @@ type chatNotice struct {
 }
 
 type pickerState struct {
-	active     bool
-	title      string
-	items      []string // filtered list (what user sees)
-	baseItems  []string // unfiltered source (for re-filter on query change)
-	cursor     int
-	onConfirm  func(string) tea.Cmd
+	active    bool
+	title     string
+	items     []string // filtered list (what user sees)
+	baseItems []string // unfiltered source (for re-filter on query change)
+	cursor    int
+	onConfirm func(string) tea.Cmd
+	// onDefault optionally handles Ctrl+D in the model picker: select the
+	// highlighted item AND save it as the default model (settings.json).
+	// Nil on every other picker, so the key is inert elsewhere.
+	onDefault  func(string) tea.Cmd
 	searchable bool
 	query      textinput.Model
 	queryEmpty bool // true until user types anything; controls Esc behavior
@@ -249,6 +253,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "enter":
 					cmd := m.confirmPicker()
 					return m, cmd
+				case "ctrl+d":
+					if m.picker.onDefault != nil {
+						cmd := m.confirmDefaultPicker()
+						return m, cmd
+					}
+					// no hook: fall through to the query input
 				case "up", "ctrl+p":
 					if m.picker.cursor > 0 {
 						m.picker.cursor--
@@ -284,6 +294,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				cmd := m.confirmPicker()
+				return m, cmd
+			case "ctrl+d":
+				cmd := m.confirmDefaultPicker()
 				return m, cmd
 			case "esc", "ctrl+c", "ctrl+q":
 				m.picker.active = false
@@ -534,7 +547,11 @@ func (m Model) View() string {
 
 	input := m.textarea.View()
 	if m.picker.active {
-		input = helpStyle.Render("↑/↓ move · Enter select · Esc cancel")
+		hint := "↑/↓ move · Enter select · Esc cancel"
+		if m.picker.onDefault != nil {
+			hint = "↑/↓ move · Enter select · Ctrl+D select as default · Esc cancel"
+		}
+		input = helpStyle.Render(hint)
 	}
 
 	// footer
@@ -617,7 +634,7 @@ func (m Model) View() string {
 			if m.picker.searchable {
 				qView = m.picker.query.View()
 			}
-			mainView = renderPickerAnnotated(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView, m.picker.annotations)
+			mainView = renderPickerAnnotated(m.picker.title, m.picker.items, m.picker.cursor, m.width, qView, m.picker.annotations, m.picker.onDefault != nil)
 		}
 	}
 
@@ -1069,6 +1086,16 @@ func (m *Model) openModelPickerScoped(provider, filter string) {
 		m.applyModelSelection(sel)
 		return nil
 	}, true)
+	// Ctrl+D: select the highlighted model AND save it as the default
+	// (settings.json defaultProvider/defaultModel), like /model <id> --default.
+	m.picker.onDefault = func(sel string) tea.Cmd {
+		if strings.HasPrefix(sel, "(querying") {
+			return nil
+		}
+		sel = strings.ReplaceAll(sel, " ", "/")
+		m.applyModelSelection(sel + " --default")
+		return nil
+	}
 	m.picker.scope = strings.ToLower(provider)
 	m.picker.cursor = cursor
 	notes := map[string]string{}
@@ -1136,6 +1163,19 @@ func (m *Model) confirmPicker() tea.Cmd {
 		return cb(sel)
 	}
 	return nil
+}
+
+// confirmDefaultPicker handles Ctrl+D: like confirmPicker but routes to the
+// optional onDefault hook (model picker: select + save as default). Pickers
+// without the hook ignore the key entirely.
+func (m *Model) confirmDefaultPicker() tea.Cmd {
+	if !m.picker.active || len(m.picker.items) == 0 || m.picker.onDefault == nil {
+		return nil
+	}
+	sel := m.picker.items[m.picker.cursor]
+	cb := m.picker.onDefault
+	m.picker.active = false
+	return cb(sel)
 }
 
 func (m *Model) applyModelSelection(modelArg string) {

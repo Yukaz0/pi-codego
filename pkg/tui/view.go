@@ -358,12 +358,13 @@ func copyToClipboard(text string) error {
 }
 
 func renderPicker(title string, items []string, cursor int, width int, queryView string) string {
-	return renderPickerAnnotated(title, items, cursor, width, queryView, nil)
+	return renderPickerAnnotated(title, items, cursor, width, queryView, nil, false)
 }
 
 // renderPickerAnnotated is renderPicker with optional right-hand notes per
-// item (e.g. model catalog metadata: ctx window, cost).
-func renderPickerAnnotated(title string, items []string, cursor int, width int, queryView string, annotations map[string]string) string {
+// item (e.g. model catalog metadata: ctx window, cost). defaultHint adds the
+// Ctrl+D "select as default" affordance to the key hints (model picker only).
+func renderPickerAnnotated(title string, items []string, cursor int, width int, queryView string, annotations map[string]string, defaultHint bool) string {
 	if len(items) == 0 {
 		return pickerBoxStyle.Render(pickerHeaderStyle.Render("No items"))
 	}
@@ -374,7 +375,11 @@ func renderPickerAnnotated(title string, items []string, cursor int, width int, 
 	sb.WriteString(pickerHeaderStyle.Render(" "+title+" ") + "\n")
 	if queryView != "" {
 		sb.WriteString(queryView + "\n")
-		sb.WriteString(helpStyle.Render("type to filter · ↑/↓ navigate · Enter select · Esc clear/close") + "\n\n")
+		hint := "type to filter · ↑/↓ navigate · Enter select · Esc clear/close"
+		if defaultHint {
+			hint = "type to filter · ↑/↓ navigate · Enter select · Ctrl+D select as default · Esc clear/close"
+		}
+		sb.WriteString(helpStyle.Render(hint) + "\n\n")
 	} else {
 		sb.WriteString(helpStyle.Render("↑/↓ navigate · Enter confirm · Esc cancel") + "\n\n")
 	}
