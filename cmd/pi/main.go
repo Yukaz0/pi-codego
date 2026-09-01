@@ -221,23 +221,23 @@ func buildEngine() (*agent.Engine, error) {
 // bounded startup budget so a hung server can never block the agent.
 // Tools are registered into the registry as soon as they become available.
 func loadMCPServers(mgr *mcp.Manager, reg *tools.Registry) {
-	fmt.Fprintln(os.Stderr, "[mcp] loading servers in background...")
+	tui.NotifyStatus("[mcp] loading servers in background...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	started, errs, _ := mgr.LoadAndStart(ctx)
 	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "[mcp] %s\n", e)
+		tui.NotifyStatus("[mcp] " + e)
 	}
 	if started > 0 {
 		for _, t := range mgr.AllTools() {
 			reg.Register(t)
 		}
-		fmt.Fprintf(os.Stderr, "[mcp] connected %d server(s), %d tools (ready)\n", started, len(mgr.AllTools()))
+		tui.NotifyStatus(fmt.Sprintf("[mcp] connected %d server(s), %d tools (ready)", started, len(mgr.AllTools())))
 		return
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		fmt.Fprintln(os.Stderr, "[mcp] startup timed out after 30s; continuing without MCP tools")
+		tui.NotifyStatus("[mcp] startup timed out after 30s; continuing without MCP tools")
 	}
 }
 
@@ -275,6 +275,9 @@ func runInteractiveMode() error {
 		}
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
+	// Route async notices (MCP background load) into the live program instead
+	// of stderr, which would corrupt the alternate screen.
+	tui.AttachNotifier(func(msg tea.Msg) { p.Send(msg) })
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("tui failed: %w", err)
 	}

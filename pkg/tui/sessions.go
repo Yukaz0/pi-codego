@@ -57,6 +57,7 @@ func (m *Model) switchToTree(tree *session.Tree, sessionID string, label string)
 	m.sessionID = sessionID
 	m.sessionName = tree.GetName()
 	m.history = tree.GetLinearHistory("")
+	m.invalidateChatCache()
 	m.refreshViewport()
 	m.appendSystem(fmt.Sprintf("— %s —", label))
 }
@@ -68,8 +69,9 @@ func handleNew(m *Model, _ string) tea.Cmd {
 	m.sessionName = ""
 	m.history = nil
 	m.streamBuffer.Reset()
-	m.viewport.SetContent(statusStyle.Render("— New session started —") + "\n" + helpStyle.Render("Type /help for commands, or just ask a question."))
-	m.viewport.GotoBottom()
+	m.notices = nil
+	m.chatCache = nil
+	m.appendRendered(statusStyle.Render("— New session started —") + "\n" + helpStyle.Render("Type /help for commands, or just ask a question."))
 	return nil
 }
 
@@ -81,7 +83,7 @@ func handleResume(m *Model, args string) tea.Cmd {
 	}
 	infos := store.ListSessions()
 	if len(infos) == 0 {
-		m.viewport.SetContent(statusStyle.Render("No previous sessions found in " + store.SessionDir))
+		m.appendRendered(statusStyle.Render("No previous sessions found in " + store.SessionDir))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -165,6 +167,7 @@ func handleFork(m *Model, args string) tea.Cmd {
 		m.engine.Config.SessionTree = session.NewTree()
 		m.sessionID = ""
 		m.history = nil
+		m.invalidateChatCache()
 		m.appendSystem("Forked from the beginning — next message starts a new branch")
 		return nil
 	}
@@ -202,7 +205,7 @@ func handleClone(m *Model, _ string) tea.Cmd {
 func handleName(m *Model, args string) tea.Cmd {
 	name := strings.TrimSpace(args)
 	if name == "" {
-		m.viewport.SetContent(errorStyle.Render("Usage: /name <session-name>"))
+		m.appendRendered(errorStyle.Render("Usage: /name <session-name>"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -219,7 +222,7 @@ func handleName(m *Model, args string) tea.Cmd {
 func handleSessionInfo(m *Model, _ string) tea.Cmd {
 	tree := m.engine.Config.SessionTree
 	if tree == nil {
-		m.viewport.SetContent(statusStyle.Render("No active session"))
+		m.appendRendered(statusStyle.Render("No active session"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -239,7 +242,7 @@ func handleSessionInfo(m *Model, _ string) tea.Cmd {
 		filepath.Join(m.ensureStorage().SessionDir, m.sessionID+".jsonl"),
 		len(hist), len(tree.Nodes), m.engine.Config.Model))
 	sb.WriteString(fmt.Sprintf("est. tokens: ~%d\n", session.EstimateTokens(hist)))
-	m.viewport.SetContent(sb.String())
+	m.appendRendered(sb.String())
 	m.viewport.GotoBottom()
 	return nil
 }

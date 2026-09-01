@@ -287,7 +287,7 @@ func handleHelp(m *Model, _ string) tea.Cmd {
 		sb.WriteString("\n")
 	}
 	sb.WriteString(helpStyle.Render("Tip: Type /model openai/gpt-4o to switch, /login opencode-go <key> to save key"))
-	m.viewport.SetContent(sb.String())
+	m.appendRendered(sb.String())
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -304,7 +304,7 @@ func handleHotkeys(m *Model, _ string) tea.Cmd {
 ` + helpStyle.Render("shift+enter: multi-line (if terminal supports)") + `
 ` + helpStyle.Render("Commands: /help for slash commands") + `
 `
-	m.viewport.SetContent(help)
+	m.appendRendered(help)
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -317,7 +317,7 @@ func handleChangelog(m *Model, _ string) tea.Cmd {
 		"  • TUI Bubbletea + RPC + print mode\n" +
 		"  • Slash commands (/model, /login, /help, ...)\n" +
 		"  • Auto-read pi npm auth.json (opencode-go)\n"
-	m.viewport.SetContent(msg)
+	m.appendRendered(msg)
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -502,7 +502,7 @@ func handleLogout(m *Model, args string) tea.Cmd {
 	}
 	providerName = strings.ToLower(providerName)
 	if err := removePiAuth(providerName); err != nil {
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Failed to remove: %v", err)))
+		m.appendRendered(errorStyle.Render(fmt.Sprintf("Failed to remove: %v", err)))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -513,7 +513,7 @@ func handleLogout(m *Model, args string) tea.Cmd {
 func handleTree(m *Model, _ string) tea.Cmd {
 	tree := m.engine.Config.SessionTree
 	if tree == nil || len(tree.Nodes) == 0 {
-		m.viewport.SetContent(statusStyle.Render("Tree is empty — no messages yet"))
+		m.appendRendered(statusStyle.Render("Tree is empty — no messages yet"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -536,7 +536,7 @@ func handleTree(m *Model, _ string) tea.Cmd {
 		sb.WriteString(fmt.Sprintf("%s %s [%s] %s\n", marker, roleColor.Render(string(msg.Role)), msg.ID[:min(6, len(msg.ID))], contentPreview))
 	}
 	sb.WriteString("\n" + helpStyle.Render("Tree is linear in Go port. Branching via SwitchBranch is available via API."))
-	m.viewport.SetContent(sb.String())
+	m.appendRendered(sb.String())
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -544,13 +544,13 @@ func handleTree(m *Model, _ string) tea.Cmd {
 func handleCompact(m *Model, args string) tea.Cmd {
 	tree := m.engine.Config.SessionTree
 	if tree == nil || len(tree.Nodes) == 0 {
-		m.viewport.SetContent(errorStyle.Render("No session to compact"))
+		m.appendRendered(errorStyle.Render("No session to compact"))
 		m.viewport.GotoBottom()
 		return nil
 	}
 	hist := tree.GetLinearHistory("")
 	if len(hist) <= 4 {
-		m.viewport.SetContent(statusStyle.Render(fmt.Sprintf("Nothing to compact: %d messages", len(hist))))
+		m.appendRendered(statusStyle.Render(fmt.Sprintf("Nothing to compact: %d messages", len(hist))))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -582,6 +582,7 @@ func handleCompact(m *Model, args string) tea.Cmd {
 		}
 		m.engine.Config.SessionTree = newTree
 		m.history = compacted
+		m.invalidateChatCache()
 		m.autoSaveSession()
 		return statusMsg(fmt.Sprintf("✓ Compacted %d → %d messages", len(hist), len(compacted)))
 	}
@@ -594,7 +595,7 @@ func handleExport(m *Model, args string) tea.Cmd {
 	}
 	tree := m.engine.Config.SessionTree
 	if tree == nil {
-		m.viewport.SetContent(errorStyle.Render("No session to export"))
+		m.appendRendered(errorStyle.Render("No session to export"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -602,7 +603,7 @@ func handleExport(m *Model, args string) tea.Cmd {
 	// minimal: write history as JSONL
 	f, err := os.Create(path)
 	if err != nil {
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Export failed: %v", err)))
+		m.appendRendered(errorStyle.Render(fmt.Sprintf("Export failed: %v", err)))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -619,19 +620,19 @@ func handleExport(m *Model, args string) tea.Cmd {
 func handleCopy(m *Model, _ string) tea.Cmd {
 	hist := m.engine.Config.SessionTree.GetLinearHistory("")
 	if len(hist) == 0 {
-		m.viewport.SetContent(statusStyle.Render("No messages to copy"))
+		m.appendRendered(statusStyle.Render("No messages to copy"))
 		m.viewport.GotoBottom()
 		return nil
 	}
 	// find last assistant
 	for i := len(hist) - 1; i >= 0; i-- {
 		if hist[i].Role == "assistant" && hist[i].Content != "" {
-			m.viewport.SetContent(headerStyle.Render(" Last Assistant Message ") + "\n\n" + renderMarkdown(hist[i].Content))
+			m.appendRendered(headerStyle.Render(" Last Assistant Message ") + "\n\n" + renderMarkdown(hist[i].Content))
 			m.viewport.GotoBottom()
 			return nil
 		}
 	}
-	m.viewport.SetContent(statusStyle.Render("No assistant message found"))
+	m.appendRendered(statusStyle.Render("No assistant message found"))
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -639,7 +640,7 @@ func handleCopy(m *Model, _ string) tea.Cmd {
 func handleReload(m *Model, _ string) tea.Cmd {
 	m.appendSystem("Reloading AGENTS.md, SKILL.md, keybindings...")
 	// In Go port, context is loaded per Turn, so just notify
-	m.viewport.SetContent(statusStyle.Render("✓ Reloaded — next turn will re-read AGENTS.md & SKILL.md"))
+	m.appendRendered(statusStyle.Render("✓ Reloaded — next turn will re-read AGENTS.md & SKILL.md"))
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -659,7 +660,7 @@ func handleSettings(m *Model, _ string) tea.Cmd {
 		m.engine.Config.Model,
 		func() string { wd, _ := os.Getwd(); return wd }(),
 	)
-	m.viewport.SetContent(info)
+	m.appendRendered(info)
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -693,7 +694,7 @@ func handleMCP(m *Model, args string) tea.Cmd {
 				msg += helpStyle.Render(fmt.Sprintf("Config: %s — check server command & npx installed\n", cfgPath))
 			}
 			msg += "\n" + helpStyle.Render("Tools from MCP appear as mcp_<server>_<tool> and are auto-registered. Try /mcp reload")
-			m.viewport.SetContent(msg)
+			m.appendRendered(msg)
 			m.viewport.GotoBottom()
 			return nil
 		}
@@ -727,16 +728,16 @@ func handleMCP(m *Model, args string) tea.Cmd {
 		// Use background
 		mgr2 := GetMCPManager()
 		if mgr2 == nil {
-			m.viewport.SetContent(statusStyle.Render("MCP reload not available (no manager)"))
+			m.appendRendered(statusStyle.Render("MCP reload not available (no manager)"))
 			m.viewport.GotoBottom()
 			return nil
 		}
 		// Actually just report - full reload requires restart; we do best effort
-		m.viewport.SetContent(statusStyle.Render("MCP reload: restart pi-go to reload servers (close and reopen). Use /mcp list to check status."))
+		m.appendRendered(statusStyle.Render("MCP reload: restart pi-go to reload servers (close and reopen). Use /mcp list to check status."))
 		m.viewport.GotoBottom()
 		return nil
 	}
-	m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Unknown /mcp subcommand: %s", args)) + "\n" + helpStyle.Render("Usage: /mcp [list|status|reload]"))
+	m.appendRendered(errorStyle.Render(fmt.Sprintf("Unknown /mcp subcommand: %s", args)) + "\n" + helpStyle.Render("Usage: /mcp [list|status|reload]"))
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -760,7 +761,7 @@ func handleTrust(m *Model, _ string) tea.Cmd {
 		}
 	}
 	msg += "\n" + helpStyle.Render("AGENTS.md auto-loaded each turn via InstructionLoader")
-	m.viewport.SetContent(msg)
+	m.appendRendered(msg)
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -768,7 +769,7 @@ func handleTrust(m *Model, _ string) tea.Cmd {
 func handleImport(m *Model, args string) tea.Cmd {
 	path := strings.TrimSpace(args)
 	if path == "" {
-		m.viewport.SetContent(errorStyle.Render("Usage: /import <file.jsonl>"))
+		m.appendRendered(errorStyle.Render("Usage: /import <file.jsonl>"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -777,7 +778,7 @@ func handleImport(m *Model, args string) tea.Cmd {
 }
 
 func handleNotImpl(m *Model, _ string) tea.Cmd {
-	m.viewport.SetContent(statusStyle.Render("This command is not yet implemented in pi-go. See /help for available commands."))
+	m.appendRendered(statusStyle.Render("This command is not yet implemented in pi-go. See /help for available commands."))
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -976,16 +977,16 @@ func handleFavorite(m *Model, args string) tea.Cmd {
 		favs := loadFavorites()
 		for _, f := range favs {
 			if strings.EqualFold(f, target) {
-				m.viewport.SetContent(statusStyle.Render(fmt.Sprintf("Already favorite: %s ♥", target)))
+				m.appendRendered(statusStyle.Render(fmt.Sprintf("Already favorite: %s ♥", target)))
 				m.viewport.GotoBottom()
 				return nil
 			}
 		}
 		favs = append(favs, target)
 		if err := saveFavorites(favs); err != nil {
-			m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("Failed to save favorite: %v", err)))
+			m.appendRendered(errorStyle.Render(fmt.Sprintf("Failed to save favorite: %v", err)))
 		} else {
-			m.viewport.SetContent(toolStyle.Render(fmt.Sprintf("♥ Added favorite: %s", target)) + "\n" + helpStyle.Render(fmt.Sprintf("Total favorites: %d — /favorites to list", len(favs))))
+			m.appendRendered(toolStyle.Render(fmt.Sprintf("♥ Added favorite: %s", target)) + "\n" + helpStyle.Render(fmt.Sprintf("Total favorites: %d — /favorites to list", len(favs))))
 		}
 		m.viewport.GotoBottom()
 		return nil
@@ -993,7 +994,7 @@ func handleFavorite(m *Model, args string) tea.Cmd {
 		if target == "" {
 			favs := loadFavorites()
 			if len(favs) == 0 {
-				m.viewport.SetContent(statusStyle.Render("No favorites to remove"))
+				m.appendRendered(statusStyle.Render("No favorites to remove"))
 				m.viewport.GotoBottom()
 				return nil
 			}
@@ -1021,16 +1022,16 @@ func handleFavorite(m *Model, args string) tea.Cmd {
 			newFavs = append(newFavs, f)
 		}
 		if !removed {
-			m.viewport.SetContent(statusStyle.Render(fmt.Sprintf("Not in favorites: %s", target)))
+			m.appendRendered(statusStyle.Render(fmt.Sprintf("Not in favorites: %s", target)))
 		} else {
 			saveFavorites(newFavs)
-			m.viewport.SetContent(toolStyle.Render(fmt.Sprintf("Removed favorite: %s", target)))
+			m.appendRendered(toolStyle.Render(fmt.Sprintf("Removed favorite: %s", target)))
 		}
 		m.viewport.GotoBottom()
 		return nil
 	case "clear":
 		saveFavorites(nil)
-		m.viewport.SetContent(statusStyle.Render("Cleared all favorites"))
+		m.appendRendered(statusStyle.Render("Cleared all favorites"))
 		m.viewport.GotoBottom()
 		return nil
 	default:
@@ -1041,18 +1042,18 @@ func handleFavorite(m *Model, args string) tea.Cmd {
 			favs := loadFavorites()
 			for _, f := range favs {
 				if strings.EqualFold(f, target) {
-					m.viewport.SetContent(statusStyle.Render(fmt.Sprintf("Already favorite: %s ♥", target)))
+					m.appendRendered(statusStyle.Render(fmt.Sprintf("Already favorite: %s ♥", target)))
 					m.viewport.GotoBottom()
 					return nil
 				}
 			}
 			favs = append(favs, target)
 			saveFavorites(favs)
-			m.viewport.SetContent(toolStyle.Render(fmt.Sprintf("♥ Added favorite: %s", target)))
+			m.appendRendered(toolStyle.Render(fmt.Sprintf("♥ Added favorite: %s", target)))
 			m.viewport.GotoBottom()
 			return nil
 		}
-		m.viewport.SetContent(errorStyle.Render("Usage: /favorite add <model> | /favorite remove <model> | /favorite list"))
+		m.appendRendered(errorStyle.Render("Usage: /favorite add <model> | /favorite remove <model> | /favorite list"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -1061,7 +1062,7 @@ func handleFavorite(m *Model, args string) tea.Cmd {
 func handleFavoriteList(m *Model, _ string) tea.Cmd {
 	favs := loadFavorites()
 	if len(favs) == 0 {
-		m.viewport.SetContent(statusStyle.Render("No favorites yet.\n") + helpStyle.Render("Add: /favorite add kimi-k2.6  atau  /favorite add opencode-go/deepseek-v4-flash"))
+		m.appendRendered(statusStyle.Render("No favorites yet.\n") + helpStyle.Render("Add: /favorite add kimi-k2.6  atau  /favorite add opencode-go/deepseek-v4-flash"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -1110,7 +1111,7 @@ func handleThink(m *Model, args string) tea.Cmd {
 		"": true, "off": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true,
 	}
 	if !valid[level] {
-		m.viewport.SetContent(errorStyle.Render("Invalid thinking level. Use: off | minimal | low | medium | high | xhigh | max"))
+		m.appendRendered(errorStyle.Render("Invalid thinking level. Use: off | minimal | low | medium | high | xhigh | max"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -1132,7 +1133,7 @@ func handleThink(m *Model, args string) tea.Cmd {
 func handleBg(m *Model, args string) tea.Cmd {
 	parts := strings.Fields(args)
 	if len(parts) == 0 {
-		m.viewport.SetContent(errorStyle.Render("Usage: /bg <command> | /bg list | /bg cancel <id>"))
+		m.appendRendered(errorStyle.Render("Usage: /bg <command> | /bg list | /bg cancel <id>"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -1140,26 +1141,26 @@ func handleBg(m *Model, args string) tea.Cmd {
 	switch sub {
 	case "list":
 		if len(m.bgTasks) == 0 {
-			m.viewport.SetContent(statusStyle.Render("No background tasks"))
+			m.appendRendered(statusStyle.Render("No background tasks"))
 		} else {
 			var sb strings.Builder
 			sb.WriteString(headerStyle.Render(" Background tasks ") + "\n")
 			for id, label := range m.bgTasks {
 				sb.WriteString(fmt.Sprintf("  [%s] %s\n", id, label))
 			}
-			m.viewport.SetContent(sb.String())
+			m.appendRendered(sb.String())
 		}
 		m.viewport.GotoBottom()
 		return nil
 	case "cancel":
 		if len(parts) < 2 {
-			m.viewport.SetContent(errorStyle.Render("Usage: /bg cancel <id>"))
+			m.appendRendered(errorStyle.Render("Usage: /bg cancel <id>"))
 			m.viewport.GotoBottom()
 			return nil
 		}
 		id := parts[1]
 		if _, ok := m.bgTasks[id]; !ok {
-			m.viewport.SetContent(statusStyle.Render("No such background task: " + id))
+			m.appendRendered(statusStyle.Render("No such background task: " + id))
 			m.viewport.GotoBottom()
 			return nil
 		}
@@ -1184,13 +1185,13 @@ func handleBg(m *Model, args string) tea.Cmd {
 
 func handleTools(m *Model, _ string) tea.Cmd {
 	if m.engine == nil || m.engine.Config.Tools == nil {
-		m.viewport.SetContent(statusStyle.Render("No tools available"))
+		m.appendRendered(statusStyle.Render("No tools available"))
 		m.viewport.GotoBottom()
 		return nil
 	}
 	defs := m.engine.Config.Tools.Definitions()
 	if len(defs) == 0 {
-		m.viewport.SetContent(statusStyle.Render("No tools registered"))
+		m.appendRendered(statusStyle.Render("No tools registered"))
 		m.viewport.GotoBottom()
 		return nil
 	}
@@ -1205,7 +1206,7 @@ func handleTools(m *Model, _ string) tea.Cmd {
 			sb.WriteString("\n" + statusStyle.Render(fmt.Sprintf("MCP tools: %d", len(all))) + "\n")
 		}
 	}
-	m.viewport.SetContent(sb.String())
+	m.appendRendered(sb.String())
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -1234,7 +1235,7 @@ BG tasks: %d
 		m.tokens,
 		len(m.bgTasks),
 	)
-	m.viewport.SetContent(info)
+	m.appendRendered(info)
 	m.viewport.GotoBottom()
 	return nil
 }
@@ -1242,12 +1243,12 @@ BG tasks: %d
 func handleCd(m *Model, args string) tea.Cmd {
 	path := strings.TrimSpace(args)
 	if path == "" {
-		m.viewport.SetContent(errorStyle.Render("Usage: /cd <path>"))
+		m.appendRendered(errorStyle.Render("Usage: /cd <path>"))
 		m.viewport.GotoBottom()
 		return nil
 	}
 	if err := os.Chdir(path); err != nil {
-		m.viewport.SetContent(errorStyle.Render(fmt.Sprintf("cd failed: %v", err)))
+		m.appendRendered(errorStyle.Render(fmt.Sprintf("cd failed: %v", err)))
 		m.viewport.GotoBottom()
 		return nil
 	}

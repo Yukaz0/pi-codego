@@ -73,6 +73,21 @@ type Model struct {
 
 	// generic picker — arrow + enter navigation for all pick operations
 	picker pickerState
+
+	// chat rendering cache: rendered string per history index, invalidated on
+	// width change or non-append history mutation (reload/fork/compact/clear).
+	chatCache      []string
+	chatCacheWidth int
+	chatStale      bool
+	notices        []chatNotice // display-only lines anchored to history size
+}
+
+// chatNotice is a display-only chat line (system notice, bash result) that is
+// not part of the model history. anchor = len(history) when it was inserted,
+// so a full re-render keeps notices interleaved in place.
+type chatNotice struct {
+	anchor int
+	text   string
 }
 
 type pickerState struct {
@@ -117,7 +132,6 @@ func NewModel(engine *agent.Engine) *Model {
 	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#8abeb7")).Bold(true)
 
 	vp := viewport.New(80, 20)
-	vp.SetContent(renderAssistantText("Welcome to Pi — coding agent. Type a message and press Enter, or `/help` for commands."))
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -125,7 +139,7 @@ func NewModel(engine *agent.Engine) *Model {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Model{
+	m := &Model{
 		engine:       engine,
 		keys:         DefaultKeyMap(),
 		viewport:     vp,
@@ -140,6 +154,10 @@ func NewModel(engine *agent.Engine) *Model {
 		usage:        &sessionUsage{},
 		keyAlias:     loadKeyOverrides(),
 	}
+	// welcome line as an anchored notice so it survives re-renders until the
+	// first real entry pushes it out of the way naturally.
+	m.notices = []chatNotice{{anchor: 0, text: renderAssistantText("Welcome to Pi — coding agent. Type a message and press Enter, or `/help` for commands.")}}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -169,9 +187,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
-		// leave room for: header(1) + footer(1) + input(3) + status(1)
-		m.viewport.Height = msg.Height - 7
 		m.textarea.SetWidth(msg.Width - 4)
+		m.refreshViewport() // re-wrap bubbles at the new width
 		return m, nil
 
 	case gitTickMsg:
@@ -313,9 +330,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "ctrl+l":
-			m.viewport.SetContent("")
 			m.history = nil
 			m.streamBuffer.Reset()
+			m.notices = nil
+			m.chatCache = nil
+			m.invalidateChatCache()
+			m.refreshViewport()
 			return m, nil
 		case "?":
 			// "?" toggles the help line only when the input is empty and
@@ -434,6 +454,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			if m.engine != nil && m.engine.Config.SessionTree != nil {
 				m.history = m.engine.Config.SessionTree.GetLinearHistory("")
+				m.invalidateChatCache()
 			}
 			m.streamBuffer.Reset()
 			m.refreshViewport()
@@ -459,6 +480,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case statusMsg:
+		m.appendSystem(string(msg))
+		return m, nil
+
+	case StatusNotice:
 		m.appendSystem(string(msg))
 		return m, nil
 
@@ -492,6 +517,42 @@ func (m Model) View() string {
 		return "loading..."
 	}
 	header := renderHeader(m.width, m.engine.Config.Model)
+
+	// status line
+	status := ""
+	if m.streaming {
+		status = spinnerStyle.Render(m.spinner.View()) + statusStyle.Render(" Pi is thinking…  (Enter to steer · Ctrl+C to interrupt)")
+	} else if m.errMsg != "" {
+		status = errorStyle.Render(m.errMsg)
+	} else if m.showHelp {
+		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
+	}
+
+	input := m.textarea.View()
+	if m.picker.active {
+		input = helpStyle.Render("↑/↓ move · Enter select · Esc cancel")
+	}
+
+	// footer
+	provName := ""
+	if m.engine != nil && m.engine.Config.Provider != nil {
+		provName = m.engine.Config.Provider.Name()
+	}
+	cwd, _ := os.Getwd()
+	bgLabels := make([]string, 0, len(m.bgTasks))
+	for _, l := range m.bgTasks {
+		bgLabels = append(bgLabels, l)
+	}
+	footerData := FooterData{
+		Cwd:           cwd,
+		Branch:        m.gitBranch,
+		SessionName:   m.sessionName,
+		Model:         m.engine.Config.Model,
+		Provider:      provName,
+		ThinkingLevel: m.thinkingMode,
+		BgTasks:       bgLabels,
+	}
+	footer := renderFooter(footerData, m.width)
 
 	// inline slash suggestion popup (shown while typing "/..." with no args)
 	slashPopup := ""
@@ -530,13 +591,10 @@ func (m Model) View() string {
 		}
 	}
 
+	// The viewport gets every row the other blocks don't need; popup and
+	// status line shrink it instead of pushing the frame past the screen.
 	vp := m.viewport
-	if slashPopup != "" {
-		rows := strings.Count(slashPopup, "\n") + 1
-		if h := vp.Height - rows; h > 3 {
-			vp.Height = h
-		}
-	}
+	vp.Height = max(3, m.height-blockRows(header, status, input, slashPopup, footer))
 	mainView := vp.View()
 	if m.picker.active {
 		if m.picker.prompt {
@@ -556,42 +614,6 @@ func (m Model) View() string {
 		}
 	}
 
-	// status line
-	status := ""
-	if m.streaming {
-		status = spinnerStyle.Render(m.spinner.View()) + statusStyle.Render(" Pi is thinking…  (Enter to steer · Ctrl+C to interrupt)")
-	} else if m.errMsg != "" {
-		status = errorStyle.Render(m.errMsg)
-	} else if m.showHelp {
-		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
-	}
-
-	input := m.textarea.View()
-	if m.picker.active {
-		input = helpStyle.Render("↑/↓ move · Enter select · Esc cancel")
-	}
-
-	// footer
-	provName := ""
-	if m.engine != nil && m.engine.Config.Provider != nil {
-		provName = m.engine.Config.Provider.Name()
-	}
-	cwd, _ := os.Getwd()
-	bgLabels := make([]string, 0, len(m.bgTasks))
-	for _, l := range m.bgTasks {
-		bgLabels = append(bgLabels, l)
-	}
-	footerData := FooterData{
-		Cwd:           cwd,
-		Branch:        m.gitBranch,
-		SessionName:   m.sessionName,
-		Model:         m.engine.Config.Model,
-		Provider:      provName,
-		ThinkingLevel: m.thinkingMode,
-		BgTasks:       bgLabels,
-	}
-	footer := renderFooter(footerData, m.width)
-
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		mainView,
@@ -600,6 +622,20 @@ func (m Model) View() string {
 		slashPopup,
 		footer,
 	)
+}
+
+// blockRows counts the terminal lines a set of rendered blocks occupies
+// (JoinVertical puts each empty block on its own line too).
+func blockRows(blocks ...string) int {
+	n := 0
+	for _, b := range blocks {
+		if b == "" {
+			n++ // JoinVertical still emits a line for empty blocks
+			continue
+		}
+		n += strings.Count(strings.TrimRight(b, "\n"), "\n") + 1
+	}
+	return n
 }
 
 // attachPendingImages moves Ctrl+V clipboard images onto the engine so the
@@ -617,71 +653,136 @@ func (m *Model) attachPendingImages() string {
 // appendUser adds a user message to history + viewport using Pi-style bubble (Box bg, no border)
 func (m *Model) appendUser(text string) {
 	m.history = append(m.history, types.NewUserMessage(text))
-	m.viewport.SetContent(m.viewport.View() + "\n" + renderUserBubble(text, m.width))
-	m.viewport.GotoBottom()
+	m.chatCache = append(m.chatCache, renderUserBubble(text, m.width))
+	m.scrollChatToBottom()
 }
 
 // AppendStartupNotice records a startup-time notice (e.g. self-update
-// result) into the chat log. Called from main before the program runs.
+// result, MCP status) into the chat log. Called from main before the program runs.
 func (m *Model) AppendStartupNotice(text string) { m.appendSystem(text) }
 
+// appendSystem adds a display-only notice line to the chat log. Notices are
+// NOT model history (they never reach the LLM or /export) but survive full
+// re-renders via their history-size anchor.
 func (m *Model) appendSystem(text string) {
-	m.viewport.SetContent(m.viewport.View() + "\n" + statusStyle.Render(text))
-	m.viewport.GotoBottom()
+	m.appendRendered(statusStyle.Render(text))
+}
+
+// appendRendered adds a pre-rendered display-only chat entry (notices, bash
+// results, etc.) anchored at the current history size.
+func (m *Model) appendRendered(rendered string) {
+	m.notices = append(m.notices, chatNotice{anchor: len(m.history), text: rendered})
+	m.chatCache = append(m.chatCache, strings.TrimRight(rendered, "\n")+"\n")
+	m.scrollChatToBottom()
+}
+
+// invalidateChatCache marks the cache stale — the next rebuild renders every
+// history entry fresh (after reload/fork/compact/clear or a tree sync).
+func (m *Model) invalidateChatCache() { m.chatStale = true }
+
+// scrollChatToBottom re-syncs the viewport with the chat cache. The view only
+// follows the bottom when the user was already there — manual scroll-back is
+// preserved while new entries arrive. Bubbletea keeps trailing newlines as
+// scrollable blank rows, so we trim them first.
+func (m *Model) scrollChatToBottom() {
+	m.rebuildChatCache()
+	wasBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(strings.TrimRight(m.chatContent(), "\n"))
+	if wasBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+// chatContent assembles the chat log from the per-entry cache. Entries are
+// rendered once per width; streaming text is appended live without caching.
+func (m *Model) chatContent() string {
+	var sb strings.Builder
+	for _, s := range m.chatCache {
+		sb.WriteString(s)
+		if !strings.HasSuffix(s, "\n") {
+			sb.WriteString("\n")
+		}
+	}
+	if m.streamBuffer.Len() > 0 {
+		sb.WriteString(renderAssistantText(m.streamBuffer.String()))
+	}
+	return sb.String()
 }
 
 // refreshViewport rebuilds the viewport content from history with Pi-style rendering:
 // user messages → bubble (Box bg), assistant → plain markdown, tools → bubble by state
 func (m *Model) refreshViewport() {
-	var sb strings.Builder
-	for _, h := range m.history {
-		switch h.Role {
-		case types.RoleUser:
-			sb.WriteString(renderUserBubble(h.Content, m.width) + "\n")
-		case types.RoleAssistant:
-			if h.Content != "" {
-				sb.WriteString(renderAssistantText(h.Content) + "\n")
-			}
-			for _, tc := range h.ToolCalls {
-				sb.WriteString(renderToolPending(tc.Function.Name, tc.Function.Arguments) + "\n")
-			}
-		case types.RoleTool:
-			for _, tr := range h.ToolResults {
-				isErr := tr.IsError
-				toolName := ""
-				// find matching tool call
-				for i := len(m.history) - 1; i >= 0; i-- {
-					if m.history[i].Role == types.RoleAssistant {
-						for _, tc := range m.history[i].ToolCalls {
-							if tc.ID == tr.ToolCallID {
-								toolName = tc.Function.Name
-								break
-							}
-						}
-						if toolName != "" {
+	m.rebuildChatCache()
+	m.viewport.SetContent(strings.TrimRight(m.chatContent(), "\n"))
+	m.viewport.GotoBottom()
+}
+
+// rebuildChatCache re-renders every entry when the width changed or the cache
+// was invalidated / drifted out of sync (reload, fork, compact, tree sync).
+func (m *Model) rebuildChatCache() {
+	if !m.chatStale && m.chatCacheWidth == m.width && len(m.chatCache) == len(m.history)+len(m.notices) {
+		return
+	}
+	m.chatCache = make([]string, 0, len(m.history)+len(m.notices))
+	m.chatCacheWidth = m.width
+	m.chatStale = false
+	ni := 0
+	for i := 0; i <= len(m.history); i++ {
+		// flush notices anchored before history entry i
+		for ni < len(m.notices) && m.notices[ni].anchor <= i {
+			m.chatCache = append(m.chatCache, strings.TrimRight(m.notices[ni].text, "\n")+"\n")
+			ni++
+		}
+		if i < len(m.history) {
+			m.chatCache = append(m.chatCache, renderHistoryEntry(m.history, i, m.width))
+		}
+	}
+}
+
+// renderHistoryEntry renders one message to its chat-log block.
+func renderHistoryEntry(history []types.Message, idx int, width int) string {
+	h := history[idx]
+	switch h.Role {
+	case types.RoleUser:
+		return renderUserBubble(h.Content, width) + "\n"
+	case types.RoleAssistant:
+		var sb strings.Builder
+		if h.Content != "" {
+			sb.WriteString(renderAssistantText(h.Content) + "\n")
+		}
+		for _, tc := range h.ToolCalls {
+			sb.WriteString(renderToolPending(tc.Function.Name, tc.Function.Arguments) + "\n")
+		}
+		return sb.String()
+	case types.RoleTool:
+		var sb strings.Builder
+		for _, tr := range h.ToolResults {
+			toolName := ""
+			// find matching tool call (search backwards)
+			for i := idx - 1; i >= 0; i-- {
+				if history[i].Role == types.RoleAssistant {
+					for _, tc := range history[i].ToolCalls {
+						if tc.ID == tr.ToolCallID {
+							toolName = tc.Function.Name
 							break
 						}
 					}
+					if toolName != "" {
+						break
+					}
 				}
-				if toolName == "" {
-					toolName = "tool"
-				}
-				body := truncate(tr.Content, 300)
-				if tr.Content == "" {
-					body = ""
-				}
-				sb.WriteString(renderToolBubble(toolName, body, isErr) + "\n")
 			}
-		case types.RoleSystem:
-			sb.WriteString(statusStyle.Render(h.Content) + "\n")
+			if toolName == "" {
+				toolName = "tool"
+			}
+			body := truncate(tr.Content, 300)
+			sb.WriteString(renderToolBubble(toolName, body, tr.IsError) + "\n")
 		}
+		return sb.String()
+	case types.RoleSystem:
+		return statusStyle.Render(h.Content) + "\n"
 	}
-	// current streaming buffer — plain markdown
-	if m.streamBuffer.Len() > 0 {
-		sb.WriteString(renderAssistantText(m.streamBuffer.String()))
-	}
-	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	return ""
 }
 
 func (m *Model) lastAssistantText() string {
@@ -782,8 +883,7 @@ func (m *Model) runBash(command string) {
 			exit = -1
 		}
 	}
-	m.viewport.SetContent(m.viewport.View() + "\n" + renderBashResult(command, strings.TrimRight(string(out), "\n"), exit, err != nil))
-	m.viewport.GotoBottom()
+	m.appendRendered(renderBashResult(command, strings.TrimRight(string(out), "\n"), exit, err != nil))
 }
 
 // runBashAndAsk executes a `!!` command, shows its output, then sends the
@@ -803,8 +903,7 @@ func (m *Model) runBashAndAsk(command string) tea.Cmd {
 			exit = -1
 		}
 	}
-	m.viewport.SetContent(m.viewport.View() + "\n" + renderBashResult(command, output, exit, err != nil))
-	m.viewport.GotoBottom()
+	m.appendRendered(renderBashResult(command, output, exit, err != nil))
 	prompt := fmt.Sprintf("I ran the shell command `%s` (exit %d). Its output:\n\n```\n%s\n```\n\nExplain/analyze the output.", command, exit, output)
 	m.streaming = true
 	m.streamBuffer.Reset()
