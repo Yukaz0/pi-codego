@@ -17,6 +17,7 @@ import (
 	"pi/pkg/provider"
 	"pi/pkg/provider/modelcatalog"
 	"pi/pkg/session"
+	"pi/pkg/update"
 )
 
 // slashCommand defines a slash command
@@ -129,6 +130,7 @@ func init() {
 		"help":          {Name: "help", Description: "Show available commands", Usage: "/help", Handler: handleHelp},
 		"hotkeys":       {Name: "hotkeys", Description: "Show keyboard shortcuts", Usage: "/hotkeys", Handler: handleHotkeys},
 		"changelog":     {Name: "changelog", Description: "Show version history", Usage: "/changelog", Handler: handleChangelog},
+		"update":        {Name: "update", Description: "Check for a newer release and update the binary now", Usage: "/update", Handler: handleUpdate},
 		"model":         {Name: "model", Description: "Switch models: /model [provider/model] or /model", Usage: "/model [provider/model]", Handler: handleModel},
 		"login":         {Name: "login", Description: "Configure provider authentication", Usage: "/login [provider] [api-key] [--url <endpoint>] [--model <id>]", Handler: handleLogin},
 		"logout":        {Name: "logout", Description: "Remove provider credentials: /logout [provider]", Usage: "/logout [provider]", Handler: handleLogout},
@@ -258,7 +260,7 @@ func handleHelp(m *Model, _ string) tea.Cmd {
 	}{
 		{"Auth & Model", []string{"login", "logout", "model", "favorite", "favorites", "scoped-models"}},
 		{"Session", []string{"new", "session", "tree", "compact", "export", "import", "resume", "name", "fork", "clone"}},
-		{"System", []string{"mcp", "settings", "reload", "trust", "copy", "share", "hotkeys", "changelog", "quit"}},
+		{"System", []string{"mcp", "settings", "reload", "trust", "copy", "share", "hotkeys", "changelog", "update", "quit"}},
 		{"Modes", []string{"think", "bg", "tools", "status", "cd"}},
 	}
 	for _, g := range groups {
@@ -308,6 +310,20 @@ func handleHotkeys(m *Model, _ string) tea.Cmd {
 	m.appendRendered(help)
 	m.viewport.GotoBottom()
 	return nil
+}
+
+// updateCmd checks GitHub Releases right now and, when a newer version is
+// published, downloads and atomically replaces the on-disk binary. The
+// running session keeps the old version until restarted.
+func updateCmd(cur string) tea.Msg {
+	to, err := update.Update(cur)
+	return updateResultMsg{From: cur, To: to, Err: err}
+}
+
+func handleUpdate(m *Model, _ string) tea.Cmd {
+	m.appendSystem(statusStyle.Render(fmt.Sprintf("checking for updates (current: %s)…", appVersion)))
+	m.viewport.GotoBottom()
+	return func() tea.Msg { return updateCmd(appVersion) }
 }
 
 func handleChangelog(m *Model, _ string) tea.Cmd {

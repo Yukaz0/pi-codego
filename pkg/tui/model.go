@@ -27,6 +27,24 @@ import (
 
 // TUI messages
 type contentDeltaMsg string
+
+// appVersion is the build-time version stamped by main; set via SetVersion
+// so /update can compare against GitHub Releases.
+var appVersion = "dev"
+
+// SetVersion publishes the binary version to the TUI (for /update).
+func SetVersion(v string) {
+	if v != "" {
+		appVersion = v
+	}
+}
+
+// updateResultMsg carries the outcome of an explicit /update check.
+type updateResultMsg struct {
+	From string
+	To   string
+	Err  error
+}
 type toolStartMsg struct{ Tool, Args string }
 type toolEndMsg struct {
 	Tool, Result string
@@ -494,6 +512,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case statusMsg:
 		m.appendSystem(string(msg))
+		return m, nil
+
+	case updateResultMsg:
+		// No spinner.Tick re-issued here: the tick chain ends with this msg.
+		switch {
+		case msg.Err != nil:
+			m.appendSystem(errorStyle.Render("update: " + msg.Err.Error()))
+		case msg.To == msg.From:
+			m.appendSystem(statusStyle.Render(fmt.Sprintf("✓ already on the latest version (%s)", msg.From)))
+		default:
+			m.appendSystem(statusStyle.Render(fmt.Sprintf("✓ updated %s → %s on disk — restart pi-go to run the new version", msg.From, msg.To)))
+		}
+		m.viewport.GotoBottom()
 		return m, nil
 
 	case StatusNotice:

@@ -42,6 +42,12 @@ func TestParseVer(t *testing.T) {
 	}
 }
 
+func TestUpdateRejectsDevBuild(t *testing.T) {
+	if _, err := Update("dev"); err == nil {
+		t.Fatal("Update('dev') harus error, bukan silent no-op")
+	}
+}
+
 func TestCheckAndUpdateSkipsDev(t *testing.T) {
 	if got := CheckAndUpdate("dev"); got != "" {
 		t.Fatalf("dev should never self-update, got %q", got)

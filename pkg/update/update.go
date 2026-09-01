@@ -78,35 +78,48 @@ func markChecked() {
 // string, or "" if no update was performed. It is safe to call on every
 // startup; internal heuristics keep it cheap and non-blocking.
 func CheckAndUpdate(cur string) string {
-	if cur == "" || cur == "dev" || strings.HasPrefix(cur, "dev-") {
-		return "" // never self-update a dev/debug build
-	}
 	if !shouldCheck() {
 		return ""
 	}
 	// markChecked even on failure to respect the cooldown.
 	defer markChecked()
-
-	latest, err := latestRelease()
-	if err != nil || latest == "" {
+	newVersion, err := Update(cur)
+	if err != nil || newVersion == cur {
 		return ""
+	}
+	return newVersion
+}
+
+// Update force-checks GitHub Releases and replaces the on-disk binary when
+// the latest release is newer than cur. Unlike CheckAndUpdate it ignores the
+// cooldown and reports failures instead of swallowing them, so it can back
+// the explicit `pi-go update` command and the in-TUI /update. It returns the
+// version now on disk — equal to cur when already up to date.
+func Update(cur string) (string, error) {
+	if cur == "" || cur == "dev" || strings.HasPrefix(cur, "dev-") {
+		return "", fmt.Errorf("development build (version %q) cannot self-update; install a release binary instead", cur)
+	}
+	latest, err := latestRelease()
+	if err != nil {
+		return "", fmt.Errorf("check for updates: %w", err)
 	}
 	if !newerSemver(latest, cur) {
-		return ""
+		markChecked()
+		return cur, nil
 	}
-
 	exe, err := os.Executable()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("locate running binary: %w", err)
 	}
 	asset := fmt.Sprintf("pi-go-%s-%s", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		asset += ".exe"
 	}
 	if err := replaceBinary(exe, latest, asset); err != nil {
-		return ""
+		return "", fmt.Errorf("download %s: %w", latest, err)
 	}
-	return latest
+	markChecked()
+	return latest, nil
 }
 
 // replaceBinary downloads the asset for the current platform and renames it
