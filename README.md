@@ -55,6 +55,7 @@
 - **Session Tree** — Struktur pohon (`Tree` + `Node`) dengan branching (`SwitchBranch`, `Rewind`), persistensi JSONL (`storage.go`), dan *compaction* otomatis jika `len(history) > MaxMessages`.
 - **Context Engineering** — `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` hierarchical (walk cwd → `/` hingga 10 level), override `SYSTEM.md`, dan `SkillLoader` untuk `SKILL.md` (frontmatter `name`/`description`).
 - **Tiga Interface** — TUI Bubbletea + Glamour, CLI print `pi -p "query"`, RPC JSONL `pi --mode rpc`.
+- **Self-update & Perintah Utilitas** — `pi-go update [--check]`, `pi-go sessions`, `pi-go config`, `pi-go doctor`; cek rilis otomatis saat startup (`/update` di TUI).
 - **Ringan & Cepat** — Build `CGO_ENABLED=0` untuk static binary, `go vet` bersih.
 
 ---
@@ -186,6 +187,7 @@ ollama serve &
 | `Ctrl+L` | Clear viewport & history |
 | `PgUp` / `Ctrl+U` | Scroll up |
 | `PgDn` / `Ctrl+D` | Scroll down |
+| `Ctrl+D` (di picker `/model`) | Pilih model **dan** simpan sebagai default ★ |
 | `?` | Toggle help |
 
 TUI merender markdown via `glamour` (auto-style, word-wrap 100), tool calls berwarna `▶ read_file`, hasil tool `✓/✗`, dan spinner `Pi is thinking…`.
@@ -206,8 +208,18 @@ TUI merender markdown via `glamour` (auto-style, word-wrap 100), tool calls berw
 | `/compact [instr]` | Manual compact context | `/compact ringkas jadi 5 poin` |
 | `/export [file]` | Export JSONL | `/export sesi.jsonl` |
 | `/import <file>` | Import JSONL (stub) | `/import sesi.jsonl` |
-| `/resume` | List sesi lama di `~/.pi/agent/sessions/` | `/resume` |
+| `/resume` | List sesi lama di `~/.pi/sessions/` | `/resume` |
+| `/name <nama>` | Beri nama sesi (tampil di `/resume`) | `/name riset-api` |
+| `/fork [msg#]` | Branch percakapan dari pesan earlier | `/fork 12` |
+| `/clone` | Duplikasi sesi saat ini | `/clone` |
+| `/think <level>` | Thinking effort: off/minimal/low/medium/high/xhigh/max | `/think high` |
+| `/bg <cmd>` | Jalankan background task; `/bg list`, `/bg cancel <id>` | `/bg make test` |
+| `/tools` | Daftar tools aktif (termasuk `mcp_*`) | `/tools` |
+| `/status` | Ringkasan: model, branch, tokens, bg tasks | `/status` |
+| `/cd <path>` | Ganti working directory sesi | `/cd ../web` |
 | `/settings` | Lihat provider/model/workdir | `/settings` |
+| `/changelog` | Riwayat versi | `/changelog` |
+| `/update` | Cek rilis baru & ganti binary (bypass cooldown) | `/update` |
 | `/copy` | Tampilkan pesan assistant terakhir | `/copy` |
 | `/reload` | Reload AGENTS.md & SKILL.md | `/reload` |
 | `/trust` | Cek AGENTS.md ter-load | `/trust` |
@@ -484,7 +496,12 @@ Saat ini ringkasan via truncasi 100 char per message (tanpa LLM call tambahan). 
 -p, --print string   Print mode query
 --mode string        interactive | print | rpc (default interactive)
 --no-mcp             Skip MCP servers (faster startup, fewer prompt tokens)
+--session <id>       Resume sesi tersimpan (lihat `pi-go sessions`)
+--continue           Lanjutkan sesi paling baru
 ```
+
+**Subcommand utilitas** (lihat [Perintah Utilitas](#4-perintah-utilitas-di-luar-tui)):
+`pi-go update [--check]` · `pi-go sessions` · `pi-go config` · `pi-go doctor`
 
 **Environment:**
 
@@ -497,7 +514,13 @@ OPENROUTER_API_KEY=sk-or-...
 GROQ_API_KEY=gsk_...
 DEEPSEEK_API_KEY=sk-...
 PI_MODEL=openai/gpt-4o-mini  # default jika --model kosong
+PI_NO_UPDATE=1               # nonaktifkan cek self-update saat startup
+PI_GO_CONFIG_DIR=~/.pi/agent # override lokasi config (auth/settings/update)
 ```
+
+**Self-update:** saat `pi-go` dijalankan, ia cek GitHub Releases (cooldown 15 menit,
+non-blocking) dan otomatis mengganti binary bila ada rilis baru — atau manual
+lewat `pi-go update` / `/update` di TUI. Set `PI_NO_UPDATE=1` untuk mematikan.
 
 **Otomatis baca config `pi` npm (tanpa `export` ulang):**
 
@@ -638,7 +661,7 @@ go vet ./...
 - [x] Image paste via clipboard (`Ctrl+V`: wl-paste / xclip / path file gambar)
 - [x] Keybindings custom via `settings.json` → `"keybindings": { action: key }`
 - [x] CI workflow (gofmt/vet/test/build per push & PR)
-- [x] Self-update: `pi-go` cek GitHub Releases saat dijalankan, otomatis ganti binary bila ada rilis lebih baru (nonaktif via `PI_NO_UPDATE=1`, cooldown 1 jam)
+- [x] Self-update: `pi-go` cek GitHub Releases saat dijalankan, otomatis ganti binary bila ada rilis lebih baru (nonaktif via `PI_NO_UPDATE=1`, cooldown 15 menit)
 - [x] Perintah utilitas CLI: `pi-go update [--check]`, `pi-go sessions`, `pi-go config`, `pi-go doctor` + `/update` di TUI
 
 ---
