@@ -288,7 +288,8 @@ func handleHelp(m *Model, _ string) tea.Cmd {
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString(helpStyle.Render("Tip: Type /model openai/gpt-4o to switch, /login opencode-go <key> to save key"))
+	sb.WriteString(helpStyle.Render("Tip: Type /model openai/gpt-4o to switch, /login opencode-go <key> to save key") + "\n")
+	sb.WriteString(helpStyle.Render("Outside the TUI: pi-go update [--check] · pi-go sessions · pi-go config · pi-go doctor"))
 	m.appendRendered(sb.String())
 	m.viewport.GotoBottom()
 	return nil

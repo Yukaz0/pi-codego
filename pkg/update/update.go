@@ -122,6 +122,16 @@ func Update(cur string) (string, error) {
 	return latest, nil
 }
 
+// Latest returns the tag of the newest published release without touching
+// the cooldown or the binary — backs `pi-go update --check` and `pi-go doctor`.
+func Latest() (string, error) {
+	return latestRelease()
+}
+
+// IsNewer reports whether version a is strictly greater than b. Exported so
+// the CLI can phrase check-only results without duplicating semver logic.
+func IsNewer(a, b string) bool { return newerSemver(a, b) }
+
 // replaceBinary downloads the asset for the current platform and renames it
 // over exe. On success the on-disk binary is the new version.
 func replaceBinary(exe, tag, asset string) error {

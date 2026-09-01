@@ -22,6 +22,7 @@
   - [Interactive TUI](#1-interactive-tui-mode-default)
   - [Print Mode](#2-print-mode-one-shot)
   - [RPC Mode](#3-rpc-mode-headless-jsonl)
+  - [Perintah Utilitas](#4-perintah-utilitas-di-luar-tui)
 - [Provider LLM](#provider-llm)
 - [Tools Bawaan](#tools-bawaan)
 - [Context & Skills](#context--skills)
@@ -274,6 +275,31 @@ Digunakan editor/extension untuk komunikasi headless:
 printf '{"type":"set_model","model":"ollama/llama3","base_url":"http://localhost:11434/v1"}\n{"type":"prompt","message":"hello"}\n' \
   | ./bin/pi --mode rpc
 ```
+
+---
+
+### 4. Perintah Utilitas (di luar TUI)
+
+Semua ini punya padanan di dalam TUI; pakai versi CLI saat kamu belum masuk
+TUI atau saat menulis skrip.
+
+| Perintah | Fungsi | Padanan TUI |
+|---|---|---|
+| `pi-go update` | Cek GitHub Releases & ganti binary sekarang (menembus cooldown) | `/update` |
+| `pi-go update --check` | Hanya lapor: terbaru / `update available: X → Y` | — |
+| `pi-go sessions` | Daftar sesi tersimpan (ID, umur, jumlah pesan) | `/resume` |
+| `pi-go config` | Lokasi file config + default provider/model + provider yang punya key | `/settings` |
+| `pi-go doctor` | Cek kesehatan: versi vs rilis terbaru, default model, key, sesi, MCP | — |
+
+```bash
+pi-go update --check          # ada rilis baru?
+pi-go update                  # install, lalu restart pi-go
+pi-go sessions                # salin ID untuk: pi-go --session <id>
+pi-go doctor                  # mendiagnosis tanpa menjalankan agen
+```
+
+`pi-go config` dan `pi-go doctor` hanya menampilkan **nama** provider yang
+memiliki API key — nilainya tidak pernah dicetak.
 
 ---
 
@@ -613,6 +639,7 @@ go vet ./...
 - [x] Keybindings custom via `settings.json` → `"keybindings": { action: key }`
 - [x] CI workflow (gofmt/vet/test/build per push & PR)
 - [x] Self-update: `pi-go` cek GitHub Releases saat dijalankan, otomatis ganti binary bila ada rilis lebih baru (nonaktif via `PI_NO_UPDATE=1`, cooldown 1 jam)
+- [x] Perintah utilitas CLI: `pi-go update [--check]`, `pi-go sessions`, `pi-go config`, `pi-go doctor` + `/update` di TUI
 
 ---
 

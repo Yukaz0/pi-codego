@@ -79,25 +79,7 @@ func main() {
 	rootCmd.Flags().StringVar(&flagSession, "session", "", "Resume a saved session by id (see /resume)")
 	rootCmd.Flags().BoolVar(&flagContinue, "continue", false, "Resume the most recent session")
 
-	updateCmd := &cobra.Command{
-		Use:   "update",
-		Short: "Check GitHub Releases and replace the binary now",
-		Long:  `Force-checks the latest pi-go release (ignoring the startup cooldown) and atomically replaces the on-disk binary when a newer version exists. The running session keeps the old version until restarted.`,
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			to, err := update.Update(version)
-			if err != nil {
-				return err
-			}
-			if to == version {
-				fmt.Fprintf(cmd.OutOrStdout(), "pi-go is already on the latest version (%s)\n", version)
-				return nil
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "pi-go updated %s → %s — restart pi-go to run the new version\n", version, to)
-			return nil
-		},
-	}
-	rootCmd.AddCommand(updateCmd)
+	addCLICommands(rootCmd)
 
 	// also accept -p as bool flag style: pi -p "query" -> cobra handles string
 	// support --mode rpc explicitly
