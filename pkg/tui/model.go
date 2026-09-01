@@ -518,14 +518,18 @@ func (m Model) View() string {
 	}
 	header := renderHeader(m.width, m.engine.Config.Model)
 
-	// status line
+	// status line — must stay exactly one terminal row: an untruncated block
+	// wraps, blockRows under-counts, and the overflow scrolls the header off
+	// screen. Errors live in the transcript (appendSystem), not here, so they
+	// are never duplicated.
 	status := ""
 	if m.streaming {
 		status = spinnerStyle.Render(m.spinner.View()) + statusStyle.Render(" Pi is thinking…  (Enter to steer · Ctrl+C to interrupt)")
-	} else if m.errMsg != "" {
-		status = errorStyle.Render(m.errMsg)
 	} else if m.showHelp {
 		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
+	}
+	if status != "" {
+		status = truncateToWidth(status, m.width, "…")
 	}
 
 	input := m.textarea.View()
@@ -580,6 +584,9 @@ func (m Model) View() string {
 					pad = strings.Repeat(" ", w)
 				}
 				line := name + pad + s.Description
+				if w := m.width - 2; w > 0 {
+					line = truncateToWidth(line, w, "…")
+				}
 				if lo+i == cursor {
 					sb.WriteString(suggestionActiveStyle.Render(line) + "\n")
 				} else {
