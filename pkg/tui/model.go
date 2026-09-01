@@ -364,7 +364,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.streaming {
 				text := strings.TrimSpace(m.textarea.Value())
 				if text != "" {
-					m.engine.Steering.Steer(text)
+					m.engine.Steering.Steer(expandSlashForSteer(m, text))
 					m.appendUser(text + " (steered)")
 					m.textarea.Reset()
 				}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -91,6 +92,9 @@ func (p *PromptLoader) Get(name string) (PromptTemplate, bool) {
 func parsePromptTemplate(name, content, path string) PromptTemplate {
 	t := PromptTemplate{Name: name, Content: content, Path: path}
 	if !strings.HasPrefix(content, "---") {
+		// No frontmatter: fall back to first non-empty body line as the
+		// description, mirroring Pi's loadTemplateFromFile.
+		t.Description = firstLineDescription(content)
 		return t
 	}
 	lines := strings.Split(content, "\n")
@@ -102,6 +106,7 @@ func parsePromptTemplate(name, content, path string) PromptTemplate {
 		}
 	}
 	if end < 0 {
+		t.Description = firstLineDescription(content)
 		return t
 	}
 	for _, line := range lines[1:end] {
@@ -113,37 +118,124 @@ func parsePromptTemplate(name, content, path string) PromptTemplate {
 		}
 	}
 	t.Content = strings.TrimSpace(strings.Join(lines[end+1:], "\n"))
+	if t.Description == "" {
+		t.Description = firstLineDescription(t.Content)
+	}
 	return t
 }
 
-var positionalRe = regexp.MustCompile(`\$[1-9][0-9]*`)
+// firstLineDescription derives a short description from the first non-empty
+// line, truncating to 60 chars like Pi does.
+func firstLineDescription(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			if len(s) > 60 {
+				return s[:60] + "..."
+			}
+			return s
+		}
+	}
+	return ""
+}
 
-// Expand substitutes Pi-style placeholders:
+// parseCommandArgs splits an argument string respecting bash-style single and
+// double quotes, so `/deploy "staging cluster" 42` yields two args. This
+// mirrors Pi's parseCommandArgs.
+func parseCommandArgs(argsString string) []string {
+	var args []string
+	var current strings.Builder
+	inQuote := byte(0)
+	for i := 0; i < len(argsString); i++ {
+		ch := argsString[i]
+		switch {
+		case inQuote != 0:
+			if ch == inQuote {
+				inQuote = 0
+			} else {
+				current.WriteByte(ch)
+			}
+		case ch == '"' || ch == '\'':
+			inQuote = ch
+		case ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r':
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
+}
+
+// substituteArgsRe matches the Pi placeholder grammar:
 //
-//	$1..$N   positional argument N
-//	$@       all arguments joined by space
-//	$ARGUMENTS  alias of $@
-//
-// If no placeholder exists and args are non-empty, args are appended.
+//	${N:-default} | ${@:-default} | ${ARGUMENTS:-default}
+//	${@:N} | ${@:N:L}
+//	$1..$N | $@ | $ARGUMENTS
+var substituteArgsRe = regexp.MustCompile(
+	`\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)`)
+
+// substituteArgs replaces placeholders in template content with argument
+// values. Replacement happens on the template only — argument values are never
+// recursively substituted. Mirrors Pi's substituteArgs.
+func substituteArgs(content string, args []string) string {
+	allArgs := strings.Join(args, " ")
+	return substituteArgsRe.ReplaceAllStringFunc(content, func(match string) string {
+		g := substituteArgsRe.FindStringSubmatch(match)
+		// g: [full, defaultTarget, defaultValue, sliceStart, sliceLen, simple]
+		if g[1] != "" { // ${X:-default}
+			var val string
+			if g[1] == "@" || g[1] == "ARGUMENTS" {
+				val = allArgs
+			} else if n, err := strconv.Atoi(g[1]); err == nil && n >= 1 && n <= len(args) {
+				val = args[n-1]
+			}
+			if val != "" {
+				return val
+			}
+			return g[2]
+		}
+		if g[3] != "" { // ${@:N} or ${@:N:L}
+			start, _ := strconv.Atoi(g[3])
+			start-- // 1-indexed -> 0-indexed
+			if start < 0 {
+				start = 0
+			}
+			if start > len(args) {
+				return ""
+			}
+			if g[4] != "" {
+				length, _ := strconv.Atoi(g[4])
+				end := start + length
+				if end > len(args) {
+					end = len(args)
+				}
+				return strings.Join(args[start:end], " ")
+			}
+			return strings.Join(args[start:], " ")
+		}
+		if g[5] != "" { // $1 / $@ / $ARGUMENTS
+			if g[5] == "@" || g[5] == "ARGUMENTS" {
+				return allArgs
+			}
+			if n, err := strconv.Atoi(g[5]); err == nil && n >= 1 && n <= len(args) {
+				return args[n-1]
+			}
+			return ""
+		}
+		return match
+	})
+}
+
+// Expand substitutes Pi-style placeholders. Like Pi, arguments are only
+// injected where a placeholder exists; a template with no placeholder is sent
+// verbatim (extra args are dropped, not appended).
 func (t PromptTemplate) Expand(args string) string {
-	fields := strings.Fields(args)
-	body := t.Content
-	hasPlaceholder := positionalRe.MatchString(body) ||
-		strings.Contains(body, "$@") || strings.Contains(body, "$ARGUMENTS")
-
-	out := body
-	for i, arg := range fields {
-		out = strings.ReplaceAll(out, fmt.Sprintf("$%d", i+1), arg)
-	}
-	// unset positional refs become empty
-	out = positionalRe.ReplaceAllString(out, "")
-	out = strings.ReplaceAll(out, "$ARGUMENTS", strings.Join(fields, " "))
-	out = strings.ReplaceAll(out, "$@", strings.Join(fields, " "))
-
-	if !hasPlaceholder && len(fields) > 0 {
-		out = out + "\n\n" + args
-	}
-	return strings.TrimSpace(out)
+	return strings.TrimSpace(substituteArgs(t.Content, parseCommandArgs(args)))
 }
 
 // FormatTemplatesPrompt lists templates in the system prompt so the model

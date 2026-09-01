@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	piContext "pi/pkg/context"
 	"pi/pkg/provider"
 	"pi/pkg/provider/modelcatalog"
 	"pi/pkg/session"
@@ -56,7 +57,51 @@ func (m *Model) slashSuggestions(prefix string) []slashCommand {
 		sort.Slice(tpls, func(i, j int) bool { return tpls[i].Name < tpls[j].Name })
 		out = append(out, tpls...)
 	}
+	// skills exposed as /skill:<name> (Pi registers them as slash commands)
+	for _, sk := range m.loadedSkills() {
+		name := "skill:" + sk.Name
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if !strings.HasPrefix(strings.ToLower(name), q) {
+			continue
+		}
+		desc := sk.Description
+		if desc == "" {
+			desc = "agent skill"
+		}
+		out = append(out, slashCommand{Name: name, Description: desc, Usage: "/" + name})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// loadedSkills returns the skills visible to the engine (nil-safe).
+func (m *Model) loadedSkills() []piContext.Skill {
+	if m.engine == nil || m.engine.Config.SkillLoader == nil {
+		return nil
+	}
+	skills, _ := m.engine.Config.SkillLoader.LoadAvailableSkills()
+	return skills
+}
+
+// promptTemplates returns the loaded .pi/prompts templates (nil-safe).
+func (m *Model) promptTemplates() []piContext.PromptTemplate {
+	if m.engine == nil || m.engine.Config.PromptLoader == nil {
+		return nil
+	}
+	return m.engine.Config.PromptLoader.LoadAll()
+}
+
+// lookupSkill finds a loaded skill by name (case-insensitive).
+func lookupSkill(m *Model, name string) (piContext.Skill, bool) {
+	for _, sk := range m.loadedSkills() {
+		if strings.EqualFold(sk.Name, name) {
+			return sk, true
+		}
+	}
+	return piContext.Skill{}, false
 }
 
 // completeSlash inserts the highlighted suggestion into the textarea.
@@ -132,14 +177,23 @@ func handleSlash(m *Model, input string) (handled bool, cmd tea.Cmd, expandPromp
 	}
 	cmdName := strings.TrimPrefix(parts[0], "/")
 	cmdName = strings.ToLower(cmdName)
-	// support /skill:name passthrough
-	if strings.HasPrefix(cmdName, "skill:") {
-		m.appendSystem(fmt.Sprintf("Skill '%s' — skills are auto-loaded via SKILL.md. Ask directly: \"use skill %s\"", cmdName, cmdName))
-		return true, nil, ""
-	}
 	args := ""
 	if len(parts) > 1 {
 		args = strings.Join(parts[1:], " ")
+	}
+	// support /skill:name expansion — Pi injects the skill body as the user
+	// message wrapped in a <skill> block, args appended after it.
+	if strings.HasPrefix(cmdName, "skill:") {
+		skillName := strings.TrimPrefix(cmdName, "skill:")
+		if sk, ok := lookupSkill(m, skillName); ok {
+			block := piContext.FormatSkillBlock(sk)
+			if args != "" {
+				block += "\n\n" + args
+			}
+			return true, nil, block
+		}
+		m.appendSystem(fmt.Sprintf("Skill '%s' not found — run /reload after adding SKILL.md, or check /help for loaded skills", skillName))
+		return true, nil, ""
 	}
 	if cmd, ok := slashCommands[cmdName]; ok {
 		return true, cmd.Handler(m, args), ""
@@ -153,6 +207,43 @@ func handleSlash(m *Model, input string) (handled bool, cmd tea.Cmd, expandPromp
 	// semua metode pilih pakai arrow+Enter — fallback ke command picker filtered
 	m.openCommandPicker(cmdName)
 	return true, nil, ""
+}
+
+// expandSlashForSteer applies Pi's mid-stream expansion: /skill:<name> and
+// prompt templates expand into their text before being queued as a steer
+// message; anything else (including built-in commands) passes through verbatim.
+func expandSlashForSteer(m *Model, input string) string {
+	if !strings.HasPrefix(input, "/") {
+		return input
+	}
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return input
+	}
+	cmdName := strings.ToLower(strings.TrimPrefix(parts[0], "/"))
+	args := ""
+	if len(parts) > 1 {
+		args = strings.Join(parts[1:], " ")
+	}
+	if strings.HasPrefix(cmdName, "skill:") {
+		if sk, ok := lookupSkill(m, strings.TrimPrefix(cmdName, "skill:")); ok {
+			block := piContext.FormatSkillBlock(sk)
+			if args != "" {
+				block += "\n\n" + args
+			}
+			return block
+		}
+		return input
+	}
+	if _, isBuiltin := slashCommands[cmdName]; isBuiltin {
+		return input
+	}
+	if m.engine != nil && m.engine.Config.PromptLoader != nil {
+		if tpl, ok := m.engine.Config.PromptLoader.Get(cmdName); ok {
+			return tpl.Expand(args)
+		}
+	}
+	return input
 }
 
 // --- handlers ---
@@ -176,6 +267,22 @@ func handleHelp(m *Model, _ string) tea.Cmd {
 			if c, ok := slashCommands[n]; ok {
 				sb.WriteString(fmt.Sprintf("  %-15s %s\n", "/"+c.Name, c.Description))
 			}
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+	// prompt templates (.pi/prompts/*.md) and skills, so they are discoverable
+	if tpls := m.promptTemplates(); len(tpls) > 0 {
+		sb.WriteString(statusStyle.Render("Prompt templates (.pi/prompts, ~/.pi/agent/prompts):") + "\n")
+		for _, t := range tpls {
+			sb.WriteString(fmt.Sprintf("  %-15s %s\n", "/"+t.Name, t.Description))
+		}
+		sb.WriteString("\n")
+	}
+	if skills := m.loadedSkills(); len(skills) > 0 {
+		sb.WriteString(statusStyle.Render("Agent skills:") + "\n")
+		for _, sk := range skills {
+			sb.WriteString(fmt.Sprintf("  %-15s %s\n", "/skill:"+sk.Name, sk.Description))
 		}
 		sb.WriteString("\n")
 	}
