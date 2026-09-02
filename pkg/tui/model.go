@@ -397,15 +397,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleThinking()
 			return m, nil
 		case "y":
-			// copy-last-answer only fires when the user is not typing; otherwise
+			// copy-last-answer only fires when idle with empty input; otherwise
 			// "y" must reach the textarea like any other character.
 			if strings.TrimSpace(m.textarea.Value()) == "" && !m.streaming {
 				if last := m.lastAssistantText(); last != "" {
 					_ = copyToClipboard(last)
 					m.appendSystem("✓ copied last answer to clipboard")
 				}
+				return m, nil
 			}
-			return m, nil
 		case "ctrl+y":
 			// copy last code block
 			if code := m.lastCodeBlock(); code != "" {
