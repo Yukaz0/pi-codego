@@ -139,11 +139,10 @@ func buildEngine() (*agent.Engine, error) {
 	if model == "" {
 		model = os.Getenv("PI_MODEL")
 	}
-	if model == "" {
-		// Default bawaan pi-go: OpenRouter vendor "stealth".
-		const defaultModelFallback = "openrouter/stealth/ox-alpha"
-		model = defaultModelFallback
-	}
+	// Jangan hardcode default di sini: dengan model kosong, ResolveProvider akan
+	// memuat defaultProvider/defaultModel dari ~/.pi/agent/settings.json (interop
+	// pi npm). Stealth/ox-alpha HANYA dipakai sebagai last-resort bila settings.json
+	// tidak ada (lihat error path di bawah) — model itu sudah deprecate (404).
 	// Jangan default ke openai/gpt-4o-mini — biarkan factory resolve
 	cfg := provider.Config{
 		Model:    model,
@@ -164,6 +163,16 @@ func buildEngine() (*agent.Engine, error) {
 				fmt.Fprintf(os.Stderr, "warning: PI_MODEL=%q invalid (%v), fallback ke %s/%s dari ~/.pi/agent/settings.json\n", model, err, pvd2.Name(), m2)
 				pvd, modelName, err = pvd2, m2, nil
 			}
+		}
+	}
+	// Last-resort built-in default: hanya dipakai bila tidak ada settings.json sama
+	// sekali (fresh install). Kalau settings.json ada, ResolveProvider sudah memuat
+	// default tersimpan di atas sehingga model deprecate tidak terpakai.
+	if err != nil {
+		fallbackCfg := cfg
+		fallbackCfg.Model = "openrouter/stealth/ox-alpha"
+		if pvd2, m2, err2 := provider.ResolveProvider(fallbackCfg); err2 == nil {
+			pvd, modelName, err = pvd2, m2, nil
 		}
 	}
 	if err != nil {
@@ -319,6 +328,10 @@ type printListener struct {
 
 func (p *printListener) OnContentDelta(delta string) {
 	fmt.Print(delta)
+}
+func (p *printListener) OnThinkingDelta(delta string) {
+	// Reasoning/thinking dikirim ke stderr agar stdout tetap bersih (bisa dipipe).
+	fmt.Fprint(os.Stderr, delta)
 }
 func (p *printListener) OnToolExecutionStart(tool string, argsJSON string) {
 	fmt.Printf("\n[tool: %s] %s\n", tool, truncatePrint(argsJSON, 200))
