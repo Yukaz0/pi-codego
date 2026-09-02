@@ -54,8 +54,8 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("?", "toggle help"),
 		),
 		Copy: key.NewBinding(
-			key.WithKeys("y"),
-			key.WithHelp("y", "copy last answer"),
+			key.WithKeys("alt+y"),
+			key.WithHelp("alt+y", "copy last answer"),
 		),
 		CopyCode: key.NewBinding(
 			key.WithKeys("ctrl+y"),

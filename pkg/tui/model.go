@@ -396,9 +396,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// quick cycle thinking mode (off → minimal → low → medium → high → xhigh → max)
 			m.cycleThinking()
 			return m, nil
-		case "y":
-			// copy-last-answer only fires when idle with empty input; otherwise
-			// "y" must reach the textarea like any other character.
+		case "alt+y":
+			// copy-last-answer lives on alt+y so the bare "y" key always types a
+			// character (a message like "yes" or any word containing y must not be
+			// hijacked). Copy only fires when idle with empty input.
 			if strings.TrimSpace(m.textarea.Value()) == "" && !m.streaming {
 				if last := m.lastAssistantText(); last != "" {
 					_ = copyToClipboard(last)
@@ -574,7 +575,7 @@ func (m Model) View() string {
 	if m.streaming {
 		status = spinnerStyle.Render(m.spinner.View()) + statusStyle.Render(" Pi is thinking…  (Enter to steer · Ctrl+C to interrupt)")
 	} else if m.showHelp {
-		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
+		status = helpStyle.Render("enter: send · ctrl+c: quit · ctrl+l: clear · alt+y: copy · ctrl+y: copy code · ctrl+p: palette · ctrl+o: model · ctrl+t: think · ↑/↓+Enter: pick")
 	}
 	if status != "" {
 		status = truncateToWidth(status, m.width, "…")

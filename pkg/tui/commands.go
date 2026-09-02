@@ -301,7 +301,7 @@ func handleHotkeys(m *Model, _ string) tea.Cmd {
 ` + helpStyle.Render("enter: send · enter (streaming): steer") + `
 ` + helpStyle.Render("ctrl+c: interrupt / quit · ctrl+l: clear · ?: help") + `
 ` + helpStyle.Render("pgup/pgdown: scroll · ctrl+u/ctrl+d: scroll") + `
-` + helpStyle.Render("y: copy last answer (plain text, selectable)") + `
+` + helpStyle.Render("alt+y: copy last answer (plain text, selectable)") + `
 ` + helpStyle.Render("ctrl+p: command palette (↑/↓ + Enter) · ctrl+o: model picker") + `
 ` + helpStyle.Render("model picker: Ctrl+D = select and save as default model") + `
 ` + helpStyle.Render("semua metode pilih: ↑/↓ navigate · Enter confirm · Esc cancel") + `
