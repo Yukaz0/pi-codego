@@ -31,7 +31,6 @@
 - [Struktur Project](#struktur-project)
 - [Development](#development)
 - [Perbandingan Node.js vs Go](#perbandingan-nodejs-vs-go)
-- [Roadmap](#roadmap)
 
 ---
 
@@ -639,32 +638,7 @@ go vet ./...
 | `JSONL` via `fs` async | `bufio.Scanner` + `sync.RWMutex` tree, buffer 10 MB |
 | Prompt template `.pi/prompts/*.md` (JS) | Tetap didukung via `AGENTS.md` + `SkillLoader` path |
 
----
-
-## Roadmap
-
-- [x] Task 1 — Tipe inti (`types`)
-- [x] Task 2 — Tools (`read_file`/`write_file`/`edit_file`/`bash`)
-- [x] Task 3 — Provider streaming (OpenAI/Anthropic/Gemini + factory)
-- [x] Task 4 — Context & Skills loader
-- [x] Task 5 — Session tree + JSONL + compaction
-- [x] Task 6 — Agent engine + steering
-- [x] Task 7 — RPC JSONL server
-- [x] Task 8 — TUI Bubbletea + CLI print + `cmd/pi`
-- [x] Prompt template `.pi/prompts/*.md` + slash command custom
-- [x] Tool tambahan (`glob`, `grep`, `todo`) via registry
-- [x] Compaction LLM-based (summarization via provider)
-- [x] Session resume via CLI flag `--session <id>`
-- [x] Slash command suggestions (live autocomplete saat mengetik `/`)
-- [x] `/login` custom endpoint (`--url`) + custom model (`--model`), provider apa pun via OpenAI-compatible
-- [x] Session fork/clone/name/export, editor `@file`, bash mode `!cmd`/`!!cmd`
-- [x] Image paste via clipboard (`Ctrl+V`: wl-paste / xclip / path file gambar)
-- [x] Keybindings custom via `settings.json` → `"keybindings": { action: key }`
-- [x] CI workflow (gofmt/vet/test/build per push & PR)
-- [x] Self-update: `pi-go` cek GitHub Releases saat dijalankan, otomatis ganti binary bila ada rilis lebih baru (nonaktif via `PI_NO_UPDATE=1`, cooldown 15 menit)
-- [x] Perintah utilitas CLI: `pi-go update [--check]`, `pi-go sessions`, `pi-go config`, `pi-go doctor` + `/update` di TUI
-
----
+|---
 
 ## Lisensi
 
