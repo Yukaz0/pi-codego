@@ -207,7 +207,7 @@ TUI merender markdown via `glamour` (auto-style, word-wrap 100), tool calls berw
 | `/new`, `/clear` | Mulai session baru | `/new` |
 | `/compact [instr]` | Manual compact context | `/compact ringkas jadi 5 poin` |
 | `/export [file]` | Export JSONL | `/export sesi.jsonl` |
-| `/import <file>` | Import JSONL (stub) | `/import sesi.jsonl` |
+| `/import <file>` | Import JSONL (format `/export`) | `/import sesi.jsonl` |
 | `/resume` | List sesi lama di `~/.pi/sessions/` | `/resume` |
 | `/name <nama>` | Beri nama sesi (tampil di `/resume`) | `/name riset-api` |
 | `/fork [msg#]` | Branch percakapan dari pesan earlier | `/fork 12` |

@@ -791,7 +791,27 @@ func handleImport(m *Model, args string) tea.Cmd {
 		m.viewport.GotoBottom()
 		return nil
 	}
-	m.appendSystem(fmt.Sprintf("Import from %s — not yet implemented, use /resume to list sessions", path))
+	f, err := os.Open(path)
+	if err != nil {
+		m.appendRendered(errorStyle.Render(fmt.Sprintf("Import failed: %v", err)))
+		m.viewport.GotoBottom()
+		return nil
+	}
+	defer f.Close()
+
+	msgs, err := session.ReadMessagesJSONL(f)
+	if err != nil {
+		m.appendRendered(errorStyle.Render(fmt.Sprintf("Import failed: %v", err)))
+		m.viewport.GotoBottom()
+		return nil
+	}
+	if len(msgs) == 0 {
+		m.appendRendered(errorStyle.Render("No messages found in " + path))
+		m.viewport.GotoBottom()
+		return nil
+	}
+
+	m.switchToTree(session.BuildTreeFromMessages(msgs), "", fmt.Sprintf("Imported %d messages from %s", len(msgs), path))
 	return nil
 }
 
