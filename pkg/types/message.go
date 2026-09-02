@@ -40,6 +40,7 @@ type Message struct {
 	ID          string            `json:"id,omitempty"`
 	Role        Role              `json:"role"`
 	Content     string            `json:"content"`
+	Reasoning   string            `json:"reasoning,omitempty"`
 	Images      []ImageAttachment `json:"images,omitempty"`
 	ToolCalls   []ToolCall        `json:"tool_calls,omitempty"`
 	ToolResults []ToolResult      `json:"tool_results,omitempty"`
@@ -70,6 +71,12 @@ func NewAssistantMessage(content string, toolCalls []ToolCall) Message {
 		ToolCalls: toolCalls,
 		CreatedAt: time.Now(),
 	}
+}
+
+func NewAssistantMessageWithReasoning(content, reasoning string, toolCalls []ToolCall) Message {
+	m := NewAssistantMessage(content, toolCalls)
+	m.Reasoning = reasoning
+	return m
 }
 
 func NewToolResultMessage(toolCallID, content string, isError bool) Message {

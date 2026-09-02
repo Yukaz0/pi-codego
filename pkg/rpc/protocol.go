@@ -20,6 +20,7 @@ type EventType string
 const (
 	EventStart          EventType = "start"
 	EventContentDelta   EventType = "content_delta"
+	EventThinkingDelta  EventType = "thinking_delta"
 	EventToolStart      EventType = "tool_start"
 	EventToolEnd        EventType = "tool_end"
 	EventTurnStart      EventType = "turn_start"

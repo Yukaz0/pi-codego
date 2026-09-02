@@ -225,6 +225,13 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 							Type:         types.EventContentDelta,
 							ContentDelta: delta["text"].(string),
 						}
+					} else if deltaType == "thinking_delta" {
+						if thinking, ok := delta["thinking"].(string); ok {
+							out <- types.StreamEvent{
+								Type:          types.EventThinkingDelta,
+								ThinkingDelta: thinking,
+							}
+						}
 					} else if deltaType == "input_json_delta" && currentToolCall != nil {
 						currentToolCall.Function.Arguments += delta["partial_json"].(string)
 					}

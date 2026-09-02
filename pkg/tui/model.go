@@ -397,9 +397,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleThinking()
 			return m, nil
 		case "y":
-			if last := m.lastAssistantText(); last != "" {
-				_ = copyToClipboard(last)
-				m.appendSystem("✓ copied last answer to clipboard")
+			// copy-last-answer only fires when the user is not typing; otherwise
+			// "y" must reach the textarea like any other character.
+			if strings.TrimSpace(m.textarea.Value()) == "" && !m.streaming {
+				if last := m.lastAssistantText(); last != "" {
+					_ = copyToClipboard(last)
+					m.appendSystem("✓ copied last answer to clipboard")
+				}
 			}
 			return m, nil
 		case "ctrl+y":
@@ -802,6 +806,9 @@ func renderHistoryEntry(history []types.Message, idx int, width int) string {
 		return renderUserBubble(h.Content, width) + "\n"
 	case types.RoleAssistant:
 		var sb strings.Builder
+		if h.Reasoning != "" {
+			sb.WriteString(renderThinkingText(h.Reasoning) + "\n")
+		}
 		if h.Content != "" {
 			sb.WriteString(renderAssistantText(h.Content) + "\n")
 		}
@@ -1345,9 +1352,10 @@ type captureListener struct {
 	model Model
 }
 
-func (l *captureListener) OnTurnStart()                {}
-func (l *captureListener) OnTurnEnd()                  {}
-func (l *captureListener) OnContentDelta(delta string) { l.buf.WriteString(delta) }
+func (l *captureListener) OnTurnStart()                 {}
+func (l *captureListener) OnTurnEnd()                   {}
+func (l *captureListener) OnContentDelta(delta string)  { l.buf.WriteString(delta) }
+func (l *captureListener) OnThinkingDelta(delta string) { l.buf.WriteString(delta) }
 func (l *captureListener) OnToolExecutionStart(toolName string, argsJSON string) {
 	// toolStartMsg is sent via tea program; we can't call tea here from arbitrary goroutine,
 	// so the engine caller (model.runTurn) handles appending via session tree -> refreshViewport
@@ -1394,6 +1402,14 @@ func (c *chainedTUIListener) OnContentDelta(delta string) {
 	}
 	if c.secondary != nil {
 		c.secondary.OnContentDelta(delta)
+	}
+}
+func (c *chainedTUIListener) OnThinkingDelta(delta string) {
+	if c.primary != nil {
+		c.primary.OnThinkingDelta(delta)
+	}
+	if c.secondary != nil {
+		c.secondary.OnThinkingDelta(delta)
 	}
 }
 func (c *chainedTUIListener) OnUsage(usage types.TokenUsage) {

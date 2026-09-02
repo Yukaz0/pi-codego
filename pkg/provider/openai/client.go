@@ -72,13 +72,15 @@ type openAIChatRequest struct {
 	Stream      bool            `json:"stream"`
 	Temperature *float64        `json:"temperature,omitempty"`
 	MaxTokens   *int            `json:"max_tokens,omitempty"`
+	Thinking    map[string]any  `json:"thinking,omitempty"`
 }
 
 type openAIStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string           `json:"content"`
-			ToolCalls []openAIToolCall `json:"tool_calls"`
+			Content          string           `json:"content"`
+			ReasoningContent string           `json:"reasoning_content"`
+			ToolCalls        []openAIToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -180,6 +182,12 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 	if req.MaxTokens > 0 {
 		chatReq.MaxTokens = &req.MaxTokens
 	}
+	if req.ThinkingLevel != "" && req.ThinkingLevel != "off" {
+		// Map thinking level to the API's thinking parameter.
+		// Most OpenAI-compatible reasoning models (DeepSeek, GLM, Qwen, etc.)
+		// accept `thinking: {"type": "enabled"}` or `{"budget_tokens": N}`.
+		chatReq.Thinking = map[string]any{"type": "enabled"}
+	}
 
 	reqBytes, err := json.Marshal(chatReq)
 	if err != nil {
@@ -264,6 +272,12 @@ func (c *Client) Stream(ctx context.Context, req types.CompletionRequest) (<-cha
 
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
+				if delta.ReasoningContent != "" {
+					out <- types.StreamEvent{
+						Type:          types.EventThinkingDelta,
+						ThinkingDelta: delta.ReasoningContent,
+					}
+				}
 				if delta.Content != "" {
 					out <- types.StreamEvent{
 						Type:         types.EventContentDelta,

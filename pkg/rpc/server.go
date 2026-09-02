@@ -97,6 +97,9 @@ func (r *rpcListener) OnTurnEnd()   { r.emit(RPCEvent{Type: EventTurnEnd}) }
 func (r *rpcListener) OnContentDelta(delta string) {
 	r.emit(RPCEvent{Type: EventContentDelta, Delta: delta})
 }
+func (r *rpcListener) OnThinkingDelta(delta string) {
+	r.emit(RPCEvent{Type: EventThinkingDelta, Delta: delta})
+}
 func (r *rpcListener) OnToolExecutionStart(toolName string, argsJSON string) {
 	r.emit(RPCEvent{Type: EventToolStart, Tool: toolName, Args: argsJSON})
 }
@@ -318,6 +321,14 @@ func (c *chainedListener) OnContentDelta(delta string) {
 	}
 	if c.secondary != nil {
 		c.secondary.OnContentDelta(delta)
+	}
+}
+func (c *chainedListener) OnThinkingDelta(delta string) {
+	if c.primary != nil {
+		c.primary.OnThinkingDelta(delta)
+	}
+	if c.secondary != nil {
+		c.secondary.OnThinkingDelta(delta)
 	}
 }
 func (c *chainedListener) OnToolExecutionStart(tool string, args string) {

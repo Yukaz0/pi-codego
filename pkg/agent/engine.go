@@ -15,6 +15,7 @@ type EventListener interface {
 	OnTurnStart()
 	OnTurnEnd()
 	OnContentDelta(delta string)
+	OnThinkingDelta(delta string)
 	OnToolExecutionStart(toolName string, argsJSON string)
 	OnToolExecutionEnd(toolName string, result string, isError bool)
 	OnUsage(usage types.TokenUsage)
@@ -26,6 +27,7 @@ type DefaultEventListener struct{}
 func (d *DefaultEventListener) OnTurnStart()                                                  {}
 func (d *DefaultEventListener) OnTurnEnd()                                                    {}
 func (d *DefaultEventListener) OnContentDelta(delta string)                                   {}
+func (d *DefaultEventListener) OnThinkingDelta(delta string)                                  {}
 func (d *DefaultEventListener) OnToolExecutionStart(toolName string, argsJSON string)         {}
 func (d *DefaultEventListener) OnToolExecutionEnd(toolName string, result string, isErr bool) {}
 func (d *DefaultEventListener) OnUsage(usage types.TokenUsage)                                {}
@@ -166,6 +168,7 @@ func (e *Engine) runSingleTurn(parentCtx context.Context, userPrompt string) err
 		}
 
 		var fullAssistantContent strings.Builder
+		var fullReasoning strings.Builder
 		var toolCalls []types.ToolCall
 		var streamErr error
 
@@ -174,6 +177,11 @@ func (e *Engine) runSingleTurn(parentCtx context.Context, userPrompt string) err
 			case types.EventContentDelta:
 				fullAssistantContent.WriteString(ev.ContentDelta)
 				e.Config.Listener.OnContentDelta(ev.ContentDelta)
+			case types.EventThinkingDelta:
+				if ev.ThinkingDelta != "" {
+					fullReasoning.WriteString(ev.ThinkingDelta)
+					e.Config.Listener.OnThinkingDelta(ev.ThinkingDelta)
+				}
 			case types.EventToolCallDone:
 				if ev.ToolCall != nil {
 					toolCalls = append(toolCalls, *ev.ToolCall)
@@ -192,7 +200,7 @@ func (e *Engine) runSingleTurn(parentCtx context.Context, userPrompt string) err
 		cancelTurn()
 
 		// Add Assistant message to session tree
-		assistantMsg := types.NewAssistantMessage(fullAssistantContent.String(), toolCalls)
+		assistantMsg := types.NewAssistantMessageWithReasoning(fullAssistantContent.String(), fullReasoning.String(), toolCalls)
 		e.Config.SessionTree.AddMessage(assistantMsg)
 
 		// 4. If no tools were called, the turn is finished.
